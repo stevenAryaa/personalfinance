@@ -1,4 +1,5 @@
 import { supabase } from "@/lib/supabase";
+import Link from "next/link";
 
 export default async function Home() {
   const { data: transactions, error } = await supabase
@@ -18,6 +19,12 @@ export default async function Home() {
       <h1 className="mb-6 text-3xl font-bold">
         Personal Finance
       </h1>
+      <Link
+      href="/transaction/new"
+      className="rounded-lg bg-black px-4 py-2 text-white"
+    >
+      + Add Transaction
+    </Link>
 
       <div className="rounded-xl bg-white p-6 shadow">
         <h2 className="mb-4 text-xl font-semibold">
