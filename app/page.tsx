@@ -103,7 +103,7 @@ export default async function Home() {
               </Link>
 
               <Link
-                href="/transactions/new"
+                href="/transaction/new"
                 className="flex items-center gap-3 rounded-xl px-4 py-3 text-slate-600 transition hover:bg-slate-100"
               >
                 <ArrowLeftRight size={18} />
@@ -169,7 +169,7 @@ export default async function Home() {
                 </button>
 
                 <Link
-                  href="/transactions/new"
+                  href="/transaction/new"
                   className="rounded-2xl bg-blue-600 px-5 py-3 font-semibold text-white shadow-sm transition hover:bg-blue-700"
                 >
                   + Add Transaction
@@ -311,7 +311,7 @@ export default async function Home() {
                   </div>
 
                   <Link
-                    href="/transactions/new"
+                    href="/transaction/new"
                     className="text-sm font-medium text-blue-600"
                   >
                     Add new
