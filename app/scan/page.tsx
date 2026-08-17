@@ -21,6 +21,7 @@ import { supabase } from "@/lib/supabase";
 type DetectedTransaction = {
   description: string;
   amount: number;
+  currency: "AUD" | "IDR";
   date: string;
   type: "income" | "expense";
   category: string;
@@ -403,34 +404,28 @@ export default function ScanReceiptPage() {
         );
       }
 
-      setDetected({
-        description:
-          result.description ||
-          "",
+setDetected({
+  description: result.description || "",
 
-        amount:
-          Number(result.amount) ||
-          0,
+  amount: Number(result.amount) || 0,
 
-        date:
-          result.date ||
-          "",
+  currency:
+    result.currency === "IDR"
+      ? "IDR"
+      : "AUD",
 
-        type:
-          result.type ===
-          "income"
-            ? "income"
-            : "expense",
+  date: result.date || "",
 
-        category:
-          result.category ||
-          "Other",
+  type:
+    result.type === "income"
+      ? "income"
+      : "expense",
 
-        confidence:
-          Number(
-            result.confidence
-          ) || 0,
-      });
+  category: result.category || "Other",
+
+  confidence:
+    Number(result.confidence) || 0,
+});
     } catch (err) {
       console.error(err);
 
@@ -446,53 +441,78 @@ export default function ScanReceiptPage() {
   // SAVE TO SUPABASE
   // --------------------------------
 
-  async function saveTransaction() {
-    if (!detected) return;
+async function saveTransaction() {
+  if (!detected) return;
 
-    try {
-      setSaving(true);
-      setError("");
+  try {
+    setSaving(true);
+    setError("");
 
-      const { error } =
-        await supabase
-          .from("transactions")
-          .insert([
-            {
-              date:
-                detected.date,
+    let normalizedAUDAmount = detected.amount;
 
-              description:
-                detected.description,
+    // Receipt was in IDR
+    if (detected.currency === "IDR") {
+      const rateResponse = await fetch("/api/exchange-rate");
 
-              amount:
-                detected.amount,
-
-              type:
-                detected.type,
-
-              category:
-                detected.category,
-
-              source:
-                "receipt",
-            },
-          ]);
-
-      if (error) {
-        throw error;
+      if (!rateResponse.ok) {
+        throw new Error(
+          "Could not get exchange rate for IDR conversion."
+        );
       }
 
-      setSaved(true);
-    } catch (err) {
-      console.error(err);
+      const rateData = await rateResponse.json();
 
-      setError(
-        "Could not save the transaction."
-      );
-    } finally {
-      setSaving(false);
+      const audToIdr = Number(rateData.rate);
+
+      if (!audToIdr || audToIdr <= 0) {
+        throw new Error("Invalid exchange rate.");
+      }
+
+      // Example:
+      // Rp126,000 / 12,600 = A$10
+      normalizedAUDAmount =
+        detected.amount / audToIdr;
     }
+
+    const { error } = await supabase
+      .from("transactions")
+      .insert([
+        {
+          date: detected.date,
+          description: detected.description,
+
+          // AUD normalized amount
+          amount: normalizedAUDAmount,
+
+          // Original receipt amount
+          original_amount: detected.amount,
+
+          currency: detected.currency,
+
+          type: detected.type,
+          category: detected.category,
+
+          source: "receipt",
+        },
+      ]);
+
+    if (error) {
+      throw error;
+    }
+
+    setSaved(true);
+  } catch (err) {
+    console.error("Save error:", err);
+
+    if (err instanceof Error) {
+      setError(err.message);
+    } else {
+      setError("Could not save transaction.");
+    }
+  } finally {
+    setSaving(false);
   }
+}
 
   // --------------------------------
   // CLEANUP
@@ -756,28 +776,48 @@ export default function ScanReceiptPage() {
 
               <div>
                 <label className="mb-2 block font-medium">
-                  Amount
+                Amount ({detected.currency})
                 </label>
 
                 <input
-                  type="number"
-                  step="0.01"
-                  value={
-                    detected.amount
-                  }
-                  onChange={(e) =>
-                    setDetected({
-                      ...detected,
-                      amount:
-                        Number(
-                          e.target
-                            .value
-                        ),
-                    })
-                  }
-                  className="w-full rounded-xl border border-slate-300 p-3"
-                />
+                    type="number"
+                    step={detected.currency === "IDR" ? "1" : "0.01"}
+                    value={detected.amount}
+                    onChange={(e) =>
+                        setDetected({
+                        ...detected,
+                        amount: Number(e.target.value),
+                        })
+                    }
+                    className="w-full rounded-xl border border-slate-300 p-3"
+                    />
               </div>
+
+              {/* Currency */}
+              <div>
+                <label className="mb-2 block font-medium">
+                    Currency
+                </label>
+
+                <select
+                    value={detected.currency}
+                    onChange={(e) =>
+                    setDetected({
+                        ...detected,
+                        currency: e.target.value as "AUD" | "IDR",
+                    })
+                    }
+                    className="w-full rounded-xl border border-slate-300 p-3"
+                >
+                    <option value="AUD">
+                    AUD — Australian Dollar
+                    </option>
+
+                    <option value="IDR">
+                    IDR — Indonesian Rupiah
+                    </option>
+                </select>
+                </div>
 
               {/* DATE */}
 
