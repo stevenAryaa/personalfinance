@@ -10,6 +10,7 @@ import {
   TrendingDown,
   PiggyBank,
   Search,
+  Camera,
   Bell,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
@@ -116,6 +117,14 @@ export default async function Home() {
               >
                 <Sparkles size={18} />
                 AI Analysis
+              </Link>
+
+              <Link
+                href="/scan"
+                className="flex items-center gap-3 rounded-xl px-4 py-3 text-slate-600 transition hover:bg-slate-100"
+              >
+                <Camera size={18} />
+                Scan Receipt
               </Link>
 
               <Link
