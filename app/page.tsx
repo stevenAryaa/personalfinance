@@ -19,6 +19,7 @@ import {
   Bell,
   CalendarDays,
   RefreshCw,
+  Plus,
 } from "lucide-react";
 
 import {
@@ -35,10 +36,6 @@ import {
   Legend,
 } from "recharts";
 
-/* =========================================================
-   TYPES
-========================================================= */
-
 type Transaction = {
   id: string;
   date: string;
@@ -47,6 +44,8 @@ type Transaction = {
   type: "income" | "expense";
   category: string | null;
   source: string | null;
+  currency?: "AUD" | "IDR";
+  original_amount?: number | string | null;
 };
 
 type Subscription = {
@@ -64,11 +63,6 @@ type Subscription = {
 
 type Currency = "AUD" | "IDR";
 
-/* =========================================================
-   CONSTANTS
-========================================================= */
-
-// Only used if our live exchange-rate API fails.
 const FALLBACK_AUD_TO_IDR = 12600;
 
 const chartColors = [
@@ -80,10 +74,6 @@ const chartColors = [
   "#8b5cf6",
   "#14b8a6",
 ];
-
-/* =========================================================
-   FORMATTERS
-========================================================= */
 
 function formatAUD(value: number) {
   return new Intl.NumberFormat("en-AU", {
@@ -101,10 +91,7 @@ function formatIDR(value: number) {
   }).format(value);
 }
 
-function formatCompactNumber(
-  value: number,
-  currency: Currency
-) {
+function formatCompactNumber(value: number, currency: Currency) {
   const formatted = new Intl.NumberFormat(
     currency === "AUD" ? "en-AU" : "id-ID",
     {
@@ -118,26 +105,11 @@ function formatCompactNumber(
     : `Rp${formatted}`;
 }
 
-/* =========================================================
-   DASHBOARD
-========================================================= */
-
 export default function DashboardPage() {
-  /* -------------------------------------------------------
-     DATA
-  ------------------------------------------------------- */
-
-  const [transactions, setTransactions] =
-    useState<Transaction[]>([]);
-
-  const [subscriptions, setSubscriptions] =
-    useState<Subscription[]>([]);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
 
   const [loading, setLoading] = useState(true);
-
-  /* -------------------------------------------------------
-     CURRENCY
-  ------------------------------------------------------- */
 
   const [displayCurrency, setDisplayCurrency] =
     useState<Currency>("AUD");
@@ -153,10 +125,6 @@ export default function DashboardPage() {
 
   const [usingFallbackRate, setUsingFallbackRate] =
     useState(false);
-
-  /* =======================================================
-     LOAD SUPABASE DATA
-  ======================================================= */
 
   async function loadDashboardData() {
     setLoading(true);
@@ -203,55 +171,33 @@ export default function DashboardPage() {
     setLoading(false);
   }
 
-  /* =======================================================
-     LOAD EXCHANGE RATE
-  ======================================================= */
-
   async function loadExchangeRate() {
     try {
       setExchangeRateLoading(true);
       setUsingFallbackRate(false);
 
-      const response = await fetch(
-        "/api/exchange-rate",
-        {
-          cache: "no-store",
-        }
-      );
+      const response = await fetch("/api/exchange-rate", {
+        cache: "no-store",
+      });
 
       if (!response.ok) {
-        throw new Error(
-          "Could not fetch exchange rate"
-        );
+        throw new Error("Could not fetch exchange rate");
       }
 
       const data = await response.json();
 
       const rate = Number(data.rate);
 
-      if (
-        !Number.isFinite(rate) ||
-        rate <= 0
-      ) {
-        throw new Error(
-          "Invalid exchange rate returned"
-        );
+      if (!Number.isFinite(rate) || rate <= 0) {
+        throw new Error("Invalid exchange rate returned");
       }
 
       setAudToIdr(rate);
-      setExchangeRateDate(
-        data.date ?? null
-      );
+      setExchangeRateDate(data.date ?? null);
     } catch (error) {
-      console.error(
-        "Exchange rate error:",
-        error
-      );
+      console.error("Exchange rate error:", error);
 
-      setAudToIdr(
-        FALLBACK_AUD_TO_IDR
-      );
-
+      setAudToIdr(FALLBACK_AUD_TO_IDR);
       setExchangeRateDate(null);
       setUsingFallbackRate(true);
     } finally {
@@ -259,346 +205,181 @@ export default function DashboardPage() {
     }
   }
 
-  /* =======================================================
-     INITIAL LOAD
-  ======================================================= */
-
   useEffect(() => {
     loadDashboardData();
     loadExchangeRate();
   }, []);
 
-  /* =======================================================
-     ACTIVE SUBSCRIPTIONS
-  ======================================================= */
+  const activeSubscriptions = useMemo(() => {
+    return subscriptions.filter(
+      (subscription) => subscription.status === "active"
+    );
+  }, [subscriptions]);
 
-  const activeSubscriptions =
-    useMemo(() => {
-      return subscriptions.filter(
-        (subscription) =>
-          subscription.status ===
-          "active"
-      );
-    }, [subscriptions]);
+  const estimatedMonthlySubscriptionCost = useMemo(() => {
+    return activeSubscriptions.reduce(
+      (total, subscription) => {
+        const amount = Number(subscription.amount);
 
-  /* =======================================================
-     MONTHLY SUBSCRIPTION COST
-  ======================================================= */
+        if (subscription.billing_cycle === "weekly") {
+          return total + (amount * 52) / 12;
+        }
 
-  const estimatedMonthlySubscriptionCost =
-    useMemo(() => {
-      return activeSubscriptions.reduce(
-        (
-          total,
-          subscription
-        ) => {
-          const amount =
-            Number(
-              subscription.amount
-            );
+        if (subscription.billing_cycle === "yearly") {
+          return total + amount / 12;
+        }
 
-          if (
-            subscription.billing_cycle ===
-            "weekly"
-          ) {
-            return (
-              total +
-              (amount * 52) / 12
-            );
-          }
+        return total + amount;
+      },
+      0
+    );
+  }, [activeSubscriptions]);
 
-          if (
-            subscription.billing_cycle ===
-            "yearly"
-          ) {
-            return (
-              total + amount / 12
-            );
-          }
-
-          return total + amount;
-        },
+  const totalIncome = useMemo(() => {
+    return transactions
+      .filter((transaction) => transaction.type === "income")
+      .reduce(
+        (total, transaction) =>
+          total + Number(transaction.amount),
         0
       );
-    }, [activeSubscriptions]);
+  }, [transactions]);
 
-  /* =======================================================
-     FINANCIAL TOTALS
-  ======================================================= */
+  const totalExpenses = useMemo(() => {
+    return transactions
+      .filter((transaction) => transaction.type === "expense")
+      .reduce(
+        (total, transaction) =>
+          total + Number(transaction.amount),
+        0
+      );
+  }, [transactions]);
 
-  const totalIncome =
-    useMemo(() => {
-      return transactions
-        .filter(
-          (transaction) =>
-            transaction.type ===
-            "income"
-        )
-        .reduce(
-          (
-            total,
-            transaction
-          ) =>
-            total +
-            Number(
-              transaction.amount
-            ),
-          0
-        );
-    }, [transactions]);
+  const totalBalance = totalIncome - totalExpenses;
 
-  const totalExpenses =
-    useMemo(() => {
-      return transactions
-        .filter(
-          (transaction) =>
-            transaction.type ===
-            "expense"
-        )
-        .reduce(
-          (
-            total,
-            transaction
-          ) =>
-            total +
-            Number(
-              transaction.amount
-            ),
-          0
-        );
-    }, [transactions]);
-
-  const totalBalance =
-    totalIncome -
-    totalExpenses;
-
-  /* =======================================================
-     MONEY DISPLAY
-  ======================================================= */
-
-  function formatMoney(
-    audValue: number
-  ) {
-    if (
-      displayCurrency === "AUD"
-    ) {
+  function formatMoney(audValue: number) {
+    if (displayCurrency === "AUD") {
       return formatAUD(audValue);
     }
 
-    return formatIDR(
-      audValue * audToIdr
-    );
+    return formatIDR(audValue * audToIdr);
   }
 
-  /* =======================================================
-     CASHFLOW CHART DATA
-  ======================================================= */
+  const last6MonthsData = useMemo(() => {
+    const now = new Date();
 
-  const last6MonthsData =
-    useMemo(() => {
-      const now = new Date();
+    const months: {
+      key: string;
+      label: string;
+      income: number;
+      expense: number;
+    }[] = [];
 
-      const months: {
-        key: string;
-        label: string;
-        income: number;
-        expense: number;
-      }[] = [];
-
-      for (
-        let i = 5;
-        i >= 0;
-        i--
-      ) {
-        const date =
-          new Date(
-            now.getFullYear(),
-            now.getMonth() - i,
-            1
-          );
-
-        const key = `${date.getFullYear()}-${String(
-          date.getMonth() + 1
-        ).padStart(2, "0")}`;
-
-        months.push({
-          key,
-
-          label:
-            date.toLocaleString(
-              "en-AU",
-              {
-                month: "short",
-              }
-            ),
-
-          income: 0,
-
-          expense: 0,
-        });
-      }
-
-      transactions.forEach(
-        (transaction) => {
-          const transactionDate =
-            new Date(
-              transaction.date
-            );
-
-          const key = `${transactionDate.getFullYear()}-${String(
-            transactionDate.getMonth() +
-              1
-          ).padStart(2, "0")}`;
-
-          const targetMonth =
-            months.find(
-              (month) =>
-                month.key === key
-            );
-
-          if (!targetMonth) {
-            return;
-          }
-
-          if (
-            transaction.type ===
-            "income"
-          ) {
-            targetMonth.income +=
-              Number(
-                transaction.amount
-              );
-          } else {
-            targetMonth.expense +=
-              Number(
-                transaction.amount
-              );
-          }
-        }
+    for (let i = 5; i >= 0; i--) {
+      const date = new Date(
+        now.getFullYear(),
+        now.getMonth() - i,
+        1
       );
 
-      const converted =
-        months.map((month) => ({
-          month: month.label,
+      const key = `${date.getFullYear()}-${String(
+        date.getMonth() + 1
+      ).padStart(2, "0")}`;
 
-          income:
-            displayCurrency ===
-            "AUD"
-              ? month.income
-              : month.income *
-                audToIdr,
+      months.push({
+        key,
+        label: date.toLocaleString("en-AU", {
+          month: "short",
+        }),
+        income: 0,
+        expense: 0,
+      });
+    }
 
-          expense:
-            displayCurrency ===
-            "AUD"
-              ? month.expense
-              : month.expense *
-                audToIdr,
-        }));
+    transactions.forEach((transaction) => {
+      const transactionDate = new Date(transaction.date);
 
-      const nonEmptyMonths =
-        converted.filter(
-          (month) =>
-            month.income > 0 ||
-            month.expense > 0
-        );
+      const key = `${transactionDate.getFullYear()}-${String(
+        transactionDate.getMonth() + 1
+      ).padStart(2, "0")}`;
 
-      return nonEmptyMonths.length >
-        0
-        ? nonEmptyMonths
-        : converted;
-    }, [
-      transactions,
-      displayCurrency,
-      audToIdr,
-    ]);
+      const targetMonth = months.find(
+        (month) => month.key === key
+      );
 
-  /* =======================================================
-     SPENDING BREAKDOWN
-  ======================================================= */
+      if (!targetMonth) return;
 
-  const spendingByCategory =
-    useMemo(() => {
-      const totals: Record<
-        string,
-        number
-      > = {};
+      if (transaction.type === "income") {
+        targetMonth.income += Number(transaction.amount);
+      } else {
+        targetMonth.expense += Number(transaction.amount);
+      }
+    });
 
-      transactions
-        .filter(
-          (transaction) =>
-            transaction.type ===
-            "expense"
-        )
-        .forEach(
-          (transaction) => {
-            const category =
-              transaction.category ||
-              "Other";
+    const converted = months.map((month) => ({
+      month: month.label,
 
-            totals[category] =
-              (totals[category] ||
-                0) +
-              Number(
-                transaction.amount
-              );
-          }
-        );
+      income:
+        displayCurrency === "AUD"
+          ? month.income
+          : month.income * audToIdr,
 
-      return Object.entries(
-        totals
-      )
-        .map(
-          ([name, value]) => ({
-            name,
+      expense:
+        displayCurrency === "AUD"
+          ? month.expense
+          : month.expense * audToIdr,
+    }));
 
-            value:
-              displayCurrency ===
-              "AUD"
-                ? value
-                : value *
-                  audToIdr,
-          })
-        )
-        .sort(
-          (a, b) =>
-            b.value - a.value
-        );
-    }, [
-      transactions,
-      displayCurrency,
-      audToIdr,
-    ]);
-
-  /* =======================================================
-     RECENT ITEMS
-  ======================================================= */
-
-  const recentTransactions =
-    transactions.slice(0, 5);
-
-  const upcomingSubscriptions =
-    activeSubscriptions.slice(
-      0,
-      5
+    const nonEmptyMonths = converted.filter(
+      (month) => month.income > 0 || month.expense > 0
     );
 
-  /* =======================================================
-     UI
-  ======================================================= */
+    return nonEmptyMonths.length > 0
+      ? nonEmptyMonths
+      : converted;
+  }, [transactions, displayCurrency, audToIdr]);
+
+  const spendingByCategory = useMemo(() => {
+    const totals: Record<string, number> = {};
+
+    transactions
+      .filter((transaction) => transaction.type === "expense")
+      .forEach((transaction) => {
+        const category = transaction.category || "Other";
+
+        totals[category] =
+          (totals[category] || 0) +
+          Number(transaction.amount);
+      });
+
+    return Object.entries(totals)
+      .map(([name, value]) => ({
+        name,
+
+        value:
+          displayCurrency === "AUD"
+            ? value
+            : value * audToIdr,
+      }))
+      .sort((a, b) => b.value - a.value);
+  }, [transactions, displayCurrency, audToIdr]);
+
+  const recentTransactions = transactions.slice(0, 5);
+
+  const upcomingSubscriptions =
+    activeSubscriptions.slice(0, 4);
 
   return (
-    <main className="min-h-screen bg-[#eef4ee] p-4 text-slate-900 md:p-6">
+    <main className="min-h-screen bg-[#eef4ee] text-slate-900">
+      <div className="mx-auto min-h-screen max-w-7xl bg-white lg:my-6 lg:min-h-0 lg:overflow-hidden lg:rounded-[28px] lg:shadow-xl">
 
-      <div className="mx-auto max-w-7xl overflow-hidden rounded-[28px] bg-white shadow-xl">
-
-        <div className="grid min-h-screen grid-cols-1 lg:grid-cols-[240px_1fr]">
+        <div className="grid lg:grid-cols-[240px_1fr]">
 
           {/* =================================================
-              SIDEBAR
+              DESKTOP SIDEBAR
           ================================================= */}
 
-          <aside className="bg-[#eff5ea] p-5">
+          <aside className="hidden min-h-screen bg-[#eff5ea] p-5 lg:block">
 
             <div className="mb-8 flex items-center gap-3">
 
@@ -618,18 +399,13 @@ export default function DashboardPage() {
 
             </div>
 
-            {/* NAVIGATION */}
-
             <nav className="space-y-2">
 
               <Link
                 href="/"
-                className="flex items-center gap-3 rounded-xl bg-lime-200 px-4 py-3 font-medium text-slate-900"
+                className="flex items-center gap-3 rounded-xl bg-lime-200 px-4 py-3 font-medium"
               >
-                <LayoutDashboard
-                  size={18}
-                />
-
+                <LayoutDashboard size={18} />
                 Dashboard
               </Link>
 
@@ -637,10 +413,7 @@ export default function DashboardPage() {
                 href="/transactions/new"
                 className="flex items-center gap-3 rounded-xl px-4 py-3 text-slate-600 transition hover:bg-white"
               >
-                <ArrowLeftRight
-                  size={18}
-                />
-
+                <ArrowLeftRight size={18} />
                 Transactions
               </Link>
 
@@ -649,7 +422,6 @@ export default function DashboardPage() {
                 className="flex items-center gap-3 rounded-xl px-4 py-3 text-slate-600 transition hover:bg-white"
               >
                 <Repeat2 size={18} />
-
                 Subscriptions
               </Link>
 
@@ -658,7 +430,6 @@ export default function DashboardPage() {
                 className="flex items-center gap-3 rounded-xl px-4 py-3 text-slate-600 transition hover:bg-white"
               >
                 <Camera size={18} />
-
                 Scan Receipt
               </Link>
 
@@ -666,10 +437,7 @@ export default function DashboardPage() {
                 href="/analysis"
                 className="flex items-center gap-3 rounded-xl px-4 py-3 text-slate-600 transition hover:bg-white"
               >
-                <Sparkles
-                  size={18}
-                />
-
+                <Sparkles size={18} />
                 AI Analysis
               </Link>
 
@@ -678,7 +446,6 @@ export default function DashboardPage() {
                 className="flex items-center gap-3 rounded-xl px-4 py-3 text-slate-600 transition hover:bg-white"
               >
                 <Upload size={18} />
-
                 CSV Import
               </Link>
 
@@ -686,18 +453,13 @@ export default function DashboardPage() {
                 type="button"
                 className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left text-slate-600 transition hover:bg-white"
               >
-                <Settings
-                  size={18}
-                />
-
+                <Settings size={18} />
                 Settings
               </button>
 
             </nav>
 
-            {/* =================================================
-                CURRENCY
-            ================================================= */}
+            {/* DESKTOP CURRENCY CARD */}
 
             <div className="mt-10 rounded-2xl bg-green-900 p-5 text-white">
 
@@ -709,16 +471,11 @@ export default function DashboardPage() {
 
                 <button
                   type="button"
-                  onClick={() =>
-                    setDisplayCurrency(
-                      "AUD"
-                    )
-                  }
-                  className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
-                    displayCurrency ===
-                    "AUD"
+                  onClick={() => setDisplayCurrency("AUD")}
+                  className={`rounded-xl px-4 py-2 text-sm font-semibold ${
+                    displayCurrency === "AUD"
                       ? "bg-lime-200 text-slate-900"
-                      : "bg-white/10 text-white hover:bg-white/20"
+                      : "bg-white/10"
                   }`}
                 >
                   AUD
@@ -726,16 +483,11 @@ export default function DashboardPage() {
 
                 <button
                   type="button"
-                  onClick={() =>
-                    setDisplayCurrency(
-                      "IDR"
-                    )
-                  }
-                  className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
-                    displayCurrency ===
-                    "IDR"
+                  onClick={() => setDisplayCurrency("IDR")}
+                  className={`rounded-xl px-4 py-2 text-sm font-semibold ${
+                    displayCurrency === "IDR"
                       ? "bg-lime-200 text-slate-900"
-                      : "bg-white/10 text-white hover:bg-white/20"
+                      : "bg-white/10"
                   }`}
                 >
                   IDR
@@ -743,11 +495,9 @@ export default function DashboardPage() {
 
               </div>
 
-              {/* EXCHANGE RATE */}
-
               <div className="mt-5 rounded-xl bg-white/10 p-3">
 
-                <div className="flex items-start justify-between gap-2">
+                <div className="flex items-center justify-between">
 
                   <div>
                     <p className="text-xs text-green-100">
@@ -756,23 +506,16 @@ export default function DashboardPage() {
 
                     <p className="mt-1 text-sm font-semibold">
                       {exchangeRateLoading
-                        ? "Loading rate..."
-                        : `1 AUD = ${formatIDR(
-                            audToIdr
-                          )}`}
+                        ? "Loading..."
+                        : `1 AUD = ${formatIDR(audToIdr)}`}
                     </p>
                   </div>
 
                   <button
                     type="button"
-                    onClick={
-                      loadExchangeRate
-                    }
-                    disabled={
-                      exchangeRateLoading
-                    }
-                    title="Refresh exchange rate"
-                    className="rounded-lg p-2 transition hover:bg-white/10 disabled:opacity-50"
+                    onClick={loadExchangeRate}
+                    disabled={exchangeRateLoading}
+                    className="rounded-lg p-2"
                   >
                     <RefreshCw
                       size={15}
@@ -789,17 +532,13 @@ export default function DashboardPage() {
                 {exchangeRateDate &&
                   !usingFallbackRate && (
                     <p className="mt-2 text-xs text-green-200">
-                      Rate date:{" "}
-                      {
-                        exchangeRateDate
-                      }
+                      Rate date: {exchangeRateDate}
                     </p>
                   )}
 
                 {usingFallbackRate && (
                   <p className="mt-2 text-xs text-amber-200">
-                    Live rate unavailable.
-                    Using fallback rate.
+                    Using fallback exchange rate
                   </p>
                 )}
 
@@ -810,452 +549,499 @@ export default function DashboardPage() {
           </aside>
 
           {/* =================================================
-              MAIN
+              MAIN CONTENT
           ================================================= */}
 
-          <section className="min-w-0 p-5 md:p-6">
+          <section className="min-w-0 pb-28 lg:pb-8">
 
-            {/* TOP BAR */}
+            {/* =================================================
+                MOBILE HEADER
+            ================================================= */}
 
-            <div className="mb-6 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+            <div className="sticky top-0 z-40 border-b border-slate-100 bg-white/95 px-4 py-4 backdrop-blur lg:hidden">
 
-              <div>
+              <div className="flex items-center justify-between">
 
-                <h1 className="text-3xl font-bold">
-                  Dashboard
+                <div className="flex items-center gap-3">
+
+                  <div className="rounded-xl bg-green-800 p-2.5 text-white">
+                    <Wallet size={18} />
+                  </div>
+
+                  <div>
+                    <p className="font-bold">
+                      Coinest
+                    </p>
+
+                    <p className="text-xs text-slate-500">
+                      Dashboard
+                    </p>
+                  </div>
+
+                </div>
+
+                <div className="flex items-center gap-2">
+
+                  <button
+                    type="button"
+                    className="rounded-xl border border-slate-200 p-2.5"
+                  >
+                    <Search size={18} />
+                  </button>
+
+                  <button
+                    type="button"
+                    className="rounded-xl border border-slate-200 p-2.5"
+                  >
+                    <Bell size={18} />
+                  </button>
+
+                </div>
+
+              </div>
+
+              {/* MOBILE CURRENCY TOGGLE */}
+
+              <div className="mt-4 flex items-center justify-between rounded-2xl bg-[#eff5ea] p-2">
+
+                <div className="flex gap-1">
+
+                  <button
+                    type="button"
+                    onClick={() => setDisplayCurrency("AUD")}
+                    className={`rounded-xl px-4 py-2 text-sm font-semibold ${
+                      displayCurrency === "AUD"
+                        ? "bg-green-800 text-white"
+                        : "text-slate-600"
+                    }`}
+                  >
+                    AUD
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setDisplayCurrency("IDR")}
+                    className={`rounded-xl px-4 py-2 text-sm font-semibold ${
+                      displayCurrency === "IDR"
+                        ? "bg-green-800 text-white"
+                        : "text-slate-600"
+                    }`}
+                  >
+                    IDR
+                  </button>
+
+                </div>
+
+                <div className="flex items-center gap-2 pr-2">
+
+                  <span className="text-xs text-slate-500">
+                    {exchangeRateLoading
+                      ? "Loading..."
+                      : `1 AUD = ${formatCompactNumber(
+                          audToIdr,
+                          "IDR"
+                        )}`}
+                  </span>
+
+                  <button
+                    type="button"
+                    onClick={loadExchangeRate}
+                    disabled={exchangeRateLoading}
+                  >
+                    <RefreshCw
+                      size={14}
+                      className={
+                        exchangeRateLoading
+                          ? "animate-spin"
+                          : "text-slate-500"
+                      }
+                    />
+                  </button>
+
+                </div>
+
+              </div>
+
+            </div>
+
+            <div className="p-4 sm:p-5 lg:p-6">
+
+              {/* DESKTOP HEADER */}
+
+              <div className="mb-6 hidden items-center justify-between lg:flex">
+
+                <div>
+                  <h1 className="text-3xl font-bold">
+                    Dashboard
+                  </h1>
+
+                  <p className="mt-1 text-slate-500">
+                    Overview of your finances, cash flow,
+                    and subscriptions
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-3">
+
+                  <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-slate-500">
+                    <Search size={18} />
+                    <span className="text-sm">
+                      Search transaction...
+                    </span>
+                  </div>
+
+                  <button
+                    type="button"
+                    className="rounded-2xl border border-slate-200 p-3"
+                  >
+                    <Bell size={18} />
+                  </button>
+
+                  <Link
+                    href="/scan"
+                    className="flex items-center gap-2 rounded-2xl bg-green-800 px-4 py-3 text-sm font-semibold text-white"
+                  >
+                    <Camera size={18} />
+                    Scan Receipt
+                  </Link>
+
+                </div>
+
+              </div>
+
+              {/* MOBILE TITLE */}
+
+              <div className="mb-4 lg:hidden">
+
+                <h1 className="text-2xl font-bold">
+                  Your finances
                 </h1>
 
-                <p className="mt-1 text-slate-500">
-                  Overview of your finances,
-                  cash flow, and subscriptions
+                <p className="mt-1 text-sm text-slate-500">
+                  Here's your current financial overview.
                 </p>
 
               </div>
 
-              <div className="flex flex-wrap items-center gap-3">
+              {/* =================================================
+                  SUMMARY CARDS
+              ================================================= */}
 
-                <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-slate-500">
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
 
-                  <Search
-                    size={18}
-                  />
+                <div className="min-w-0 rounded-2xl bg-[#214f45] p-4 text-white sm:p-5 lg:rounded-3xl lg:p-6">
 
-                  <span className="text-sm">
-                    Search transaction...
-                  </span>
+                  <p className="text-xs text-green-100 sm:text-sm">
+                    Balance
+                  </p>
+
+                  <p className="mt-2 break-words text-xl font-bold sm:text-2xl lg:text-3xl">
+                    {formatMoney(totalBalance)}
+                  </p>
+
+                  <p className="mt-2 hidden text-xs text-green-100 sm:block">
+                    Net position
+                  </p>
 
                 </div>
 
-                <button
-                  type="button"
-                  className="rounded-2xl border border-slate-200 bg-white p-3"
+                <div className="min-w-0 rounded-2xl border border-slate-200 p-4 sm:p-5 lg:rounded-3xl lg:p-6">
+
+                  <p className="text-xs text-slate-500 sm:text-sm">
+                    Income
+                  </p>
+
+                  <p className="mt-2 break-words text-xl font-bold sm:text-2xl lg:text-3xl">
+                    {formatMoney(totalIncome)}
+                  </p>
+
+                  <p className="mt-2 hidden items-center gap-1 text-xs text-green-600 sm:flex">
+                    <TrendingUp size={14} />
+                    Money in
+                  </p>
+
+                </div>
+
+                <div className="min-w-0 rounded-2xl border border-slate-200 p-4 sm:p-5 lg:rounded-3xl lg:p-6">
+
+                  <p className="text-xs text-slate-500 sm:text-sm">
+                    Expenses
+                  </p>
+
+                  <p className="mt-2 break-words text-xl font-bold sm:text-2xl lg:text-3xl">
+                    {formatMoney(totalExpenses)}
+                  </p>
+
+                  <p className="mt-2 hidden items-center gap-1 text-xs text-red-600 sm:flex">
+                    <TrendingDown size={14} />
+                    Money out
+                  </p>
+
+                </div>
+
+                <div className="min-w-0 rounded-2xl border border-slate-200 p-4 sm:p-5 lg:rounded-3xl lg:p-6">
+
+                  <p className="text-xs text-slate-500 sm:text-sm">
+                    Subscriptions
+                  </p>
+
+                  <p className="mt-2 break-words text-xl font-bold sm:text-2xl lg:text-3xl">
+                    {formatMoney(
+                      estimatedMonthlySubscriptionCost
+                    )}
+                  </p>
+
+                  <p className="mt-2 text-xs text-slate-500">
+                    {activeSubscriptions.length} active
+                  </p>
+
+                </div>
+
+              </div>
+
+              {/* MOBILE QUICK ACTIONS */}
+
+              <div className="mt-4 grid grid-cols-2 gap-3 lg:hidden">
+
+                <Link
+                  href="/transactions/new"
+                  className="flex items-center justify-center gap-2 rounded-2xl border border-slate-200 p-3 text-sm font-semibold"
                 >
-                  <Bell size={18} />
-                </button>
+                  <Plus size={17} />
+                  Add Transaction
+                </Link>
 
                 <Link
                   href="/scan"
-                  className="flex items-center gap-2 rounded-2xl bg-green-800 px-4 py-3 text-sm font-semibold text-white transition hover:bg-green-900"
+                  className="flex items-center justify-center gap-2 rounded-2xl bg-green-800 p-3 text-sm font-semibold text-white"
                 >
-                  <Camera size={18} />
-
+                  <Camera size={17} />
                   Scan Receipt
                 </Link>
 
               </div>
 
-            </div>
+              {/* =================================================
+                  CHARTS
+              ================================================= */}
 
-            {/* =================================================
-                SUMMARY CARDS
-            ================================================= */}
+              <div className="mt-5 grid gap-4 xl:grid-cols-[1.7fr_1fr]">
 
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                {/* CASHFLOW */}
 
-              {/* BALANCE */}
+                <div className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 p-4 sm:p-5 lg:rounded-3xl lg:p-6">
 
-              <div className="min-w-0 rounded-3xl bg-[#214f45] p-6 text-white">
+                  <div className="mb-4 flex items-end justify-between gap-3">
 
-                <p className="text-sm text-green-100">
-                  Total Balance
-                </p>
+                    <div>
+                      <p className="text-xs text-slate-500 sm:text-sm">
+                        Cashflow
+                      </p>
 
-                <p className="mt-3 break-words text-3xl font-bold">
-                  {formatMoney(
-                    totalBalance
-                  )}
-                </p>
+                      <h2 className="text-lg font-bold sm:text-xl lg:text-2xl">
+                        Income vs Spending
+                      </h2>
+                    </div>
 
-                <p className="mt-2 text-sm text-green-100">
-                  Net position
-                </p>
+                    <p className="text-xs text-slate-500">
+                      Last 6 months
+                    </p>
 
-              </div>
+                  </div>
 
-              {/* INCOME */}
+                  <div className="h-[260px] w-full min-w-0 sm:h-[310px] lg:h-[340px]">
 
-              <div className="min-w-0 rounded-3xl border border-slate-200 p-6">
+                    <ResponsiveContainer
+                      width="100%"
+                      height="100%"
+                    >
 
-                <p className="text-sm text-slate-500">
-                  Total Income
-                </p>
+                      <BarChart
+                        data={last6MonthsData}
+                        margin={{
+                          top: 10,
+                          right: 5,
+                          left: -10,
+                          bottom: 5,
+                        }}
+                        barCategoryGap="20%"
+                      >
 
-                <p className="mt-3 break-words text-3xl font-bold">
-                  {formatMoney(
-                    totalIncome
-                  )}
-                </p>
+                        <CartesianGrid
+                          strokeDasharray="3 3"
+                          vertical={false}
+                        />
 
-                <p className="mt-2 flex items-center gap-2 text-sm text-green-600">
+                        <XAxis
+                          dataKey="month"
+                          tickLine={false}
+                          axisLine={false}
+                          tick={{
+                            fontSize: 11,
+                          }}
+                        />
 
-                  <TrendingUp
-                    size={16}
-                  />
+                        <YAxis
+                          width={65}
+                          tickLine={false}
+                          axisLine={false}
+                          tickMargin={5}
+                          tick={{
+                            fontSize: 10,
+                          }}
+                          domain={[
+                            0,
+                            (dataMax: number) =>
+                              dataMax === 0
+                                ? 100
+                                : Math.ceil(dataMax * 1.1),
+                          ]}
+                          tickFormatter={(value) =>
+                            formatCompactNumber(
+                              Number(value),
+                              displayCurrency
+                            )
+                          }
+                        />
 
-                  Money coming in
+                        <Tooltip
+                          formatter={(value, name) => {
+                            const numberValue =
+                              Number(value);
 
-                </p>
+                            const formatted =
+                              displayCurrency === "AUD"
+                                ? formatAUD(numberValue)
+                                : formatIDR(numberValue);
 
-              </div>
+                            return [formatted, name];
+                          }}
+                        />
 
-              {/* EXPENSES */}
+                        <Legend
+                          wrapperStyle={{
+                            fontSize: "12px",
+                          }}
+                        />
 
-              <div className="min-w-0 rounded-3xl border border-slate-200 p-6">
+                        <Bar
+                          dataKey="income"
+                          name="Income"
+                          fill="#214f45"
+                          radius={[6, 6, 0, 0]}
+                          maxBarSize={55}
+                        />
 
-                <p className="text-sm text-slate-500">
-                  Total Expenses
-                </p>
+                        <Bar
+                          dataKey="expense"
+                          name="Expense"
+                          fill="#9FE870"
+                          radius={[6, 6, 0, 0]}
+                          maxBarSize={55}
+                        />
 
-                <p className="mt-3 break-words text-3xl font-bold">
-                  {formatMoney(
-                    totalExpenses
-                  )}
-                </p>
+                      </BarChart>
 
-                <p className="mt-2 flex items-center gap-2 text-sm text-red-600">
+                    </ResponsiveContainer>
 
-                  <TrendingDown
-                    size={16}
-                  />
+                  </div>
 
-                  Money going out
+                </div>
 
-                </p>
+                {/* SPENDING */}
 
-              </div>
-
-              {/* SUBSCRIPTIONS */}
-
-              <div className="min-w-0 rounded-3xl border border-slate-200 p-6">
-
-                <p className="text-sm text-slate-500">
-                  Subscriptions / Month
-                </p>
-
-                <p className="mt-3 break-words text-3xl font-bold">
-                  {formatMoney(
-                    estimatedMonthlySubscriptionCost
-                  )}
-                </p>
-
-                <p className="mt-2 text-sm text-slate-500">
-                  {
-                    activeSubscriptions.length
-                  }{" "}
-                  active subscriptions
-                </p>
-
-              </div>
-
-            </div>
-
-            {/* =================================================
-                CHARTS
-            ================================================= */}
-
-            <div className="mt-6 grid gap-4 xl:grid-cols-[1.7fr_1fr]">
-
-              {/* CASH FLOW */}
-
-              <div className="min-w-0 rounded-3xl border border-slate-200 p-5 md:p-6">
-
-                <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 p-4 sm:p-5 lg:rounded-3xl lg:p-6">
 
                   <div>
 
-                    <p className="text-sm text-slate-500">
-                      Cashflow
+                    <p className="text-xs text-slate-500 sm:text-sm">
+                      Statistics
                     </p>
 
-                    <h2 className="text-2xl font-bold">
-                      Income vs Spending
+                    <h2 className="text-lg font-bold sm:text-xl lg:text-2xl">
+                      Spending Breakdown
                     </h2>
 
                   </div>
 
-                  <p className="text-sm text-slate-500">
-                    Last 6 months
-                  </p>
+                  {spendingByCategory.length === 0 ? (
 
-                </div>
-
-                <div className="h-[340px] w-full min-w-0">
-
-                  <ResponsiveContainer
-                    width="100%"
-                    height="100%"
-                  >
-
-                    <BarChart
-                      data={
-                        last6MonthsData
-                      }
-                      margin={{
-                        top: 10,
-                        right: 15,
-                        left: 15,
-                        bottom: 10,
-                      }}
-                      barCategoryGap="25%"
-                    >
-
-                      <CartesianGrid
-                        strokeDasharray="3 3"
-                        vertical={false}
-                      />
-
-                      <XAxis
-                        dataKey="month"
-                        tickLine={false}
-                        axisLine={false}
-                        tick={{
-                          fontSize: 12,
-                        }}
-                      />
-
-                      <YAxis
-                        width={85}
-                        tickLine={false}
-                        axisLine={false}
-                        tickMargin={8}
-                        tick={{
-                          fontSize: 12,
-                        }}
-                        domain={[
-                          0,
-                          (
-                            dataMax: number
-                          ) =>
-                            dataMax ===
-                            0
-                              ? 100
-                              : Math.ceil(
-                                  dataMax *
-                                    1.1
-                                ),
-                        ]}
-                        tickFormatter={(
-                          value
-                        ) =>
-                          formatCompactNumber(
-                            Number(
-                              value
-                            ),
-                            displayCurrency
-                          )
-                        }
-                      />
-
-                      <Tooltip
-                        formatter={(
-                          value,
-                          name
-                        ) => {
-                          const numberValue =
-                            Number(
-                              value
-                            );
-
-                          const formatted =
-                            displayCurrency ===
-                            "AUD"
-                              ? formatAUD(
-                                  numberValue
-                                )
-                              : formatIDR(
-                                  numberValue
-                                );
-
-                          return [
-                            formatted,
-                            name,
-                          ];
-                        }}
-                      />
-
-                      <Legend />
-
-                      <Bar
-                        dataKey="income"
-                        name="Income"
-                        fill="#214f45"
-                        radius={[
-                          8,
-                          8,
-                          0,
-                          0,
-                        ]}
-                        maxBarSize={60}
-                      />
-
-                      <Bar
-                        dataKey="expense"
-                        name="Expense"
-                        fill="#9FE870"
-                        radius={[
-                          8,
-                          8,
-                          0,
-                          0,
-                        ]}
-                        maxBarSize={60}
-                      />
-
-                    </BarChart>
-
-                  </ResponsiveContainer>
-
-                </div>
-
-              </div>
-
-              {/* =================================================
-                  SPENDING BREAKDOWN
-              ================================================= */}
-
-              <div className="min-w-0 rounded-3xl border border-slate-200 p-5 md:p-6">
-
-                <div className="mb-4">
-
-                  <p className="text-sm text-slate-500">
-                    Statistics
-                  </p>
-
-                  <h2 className="text-2xl font-bold">
-                    Spending Breakdown
-                  </h2>
-
-                </div>
-
-                {spendingByCategory.length ===
-                0 ? (
-
-                  <div className="flex h-[320px] items-center justify-center rounded-2xl border border-dashed border-slate-300 text-center text-slate-500">
-                    No spending data yet.
-                  </div>
-
-                ) : (
-                  <>
-
-                    <div className="h-[240px] w-full min-w-0">
-
-                      <ResponsiveContainer
-                        width="100%"
-                        height="100%"
-                      >
-
-                        <PieChart>
-
-                          <Pie
-                            data={
-                              spendingByCategory
-                            }
-                            dataKey="value"
-                            nameKey="name"
-                            innerRadius={55}
-                            outerRadius={85}
-                            paddingAngle={3}
-                          >
-
-                            {spendingByCategory.map(
-                              (
-                                entry,
-                                index
-                              ) => (
-
-                                <Cell
-                                  key={
-                                    entry.name
-                                  }
-                                  fill={
-                                    chartColors[
-                                      index %
-                                        chartColors.length
-                                    ]
-                                  }
-                                />
-
-                              )
-                            )}
-
-                          </Pie>
-
-                          <Tooltip
-                            formatter={(
-                              value,
-                              name
-                            ) => {
-                              const numberValue =
-                                Number(
-                                  value
-                                );
-
-                              const formatted =
-                                displayCurrency ===
-                                "AUD"
-                                  ? formatAUD(
-                                      numberValue
-                                    )
-                                  : formatIDR(
-                                      numberValue
-                                    );
-
-                              return [
-                                formatted,
-                                name,
-                              ];
-                            }}
-                          />
-
-                        </PieChart>
-
-                      </ResponsiveContainer>
-
+                    <div className="mt-4 flex h-[220px] items-center justify-center rounded-2xl border border-dashed border-slate-300 text-center text-sm text-slate-500">
+                      No spending data yet.
                     </div>
 
-                    {/* CATEGORY LIST */}
+                  ) : (
+                    <>
 
-                    <div className="mt-4 space-y-3">
+                      <div className="h-[210px] w-full sm:h-[230px]">
 
-                      {spendingByCategory
-                        .slice(0, 5)
-                        .map(
-                          (
-                            item,
-                            index
-                          ) => (
+                        <ResponsiveContainer
+                          width="100%"
+                          height="100%"
+                        >
+
+                          <PieChart>
+
+                            <Pie
+                              data={spendingByCategory}
+                              dataKey="value"
+                              nameKey="name"
+                              innerRadius={48}
+                              outerRadius={75}
+                              paddingAngle={3}
+                            >
+
+                              {spendingByCategory.map(
+                                (entry, index) => (
+                                  <Cell
+                                    key={entry.name}
+                                    fill={
+                                      chartColors[
+                                        index %
+                                          chartColors.length
+                                      ]
+                                    }
+                                  />
+                                )
+                              )}
+
+                            </Pie>
+
+                            <Tooltip
+                              formatter={(value, name) => {
+                                const numberValue =
+                                  Number(value);
+
+                                const formatted =
+                                  displayCurrency === "AUD"
+                                    ? formatAUD(numberValue)
+                                    : formatIDR(numberValue);
+
+                                return [formatted, name];
+                              }}
+                            />
+
+                          </PieChart>
+
+                        </ResponsiveContainer>
+
+                      </div>
+
+                      <div className="space-y-2">
+
+                        {spendingByCategory
+                          .slice(0, 5)
+                          .map((item, index) => (
 
                             <div
-                              key={
-                                item.name
-                              }
-                              className="flex items-center justify-between gap-3 text-sm"
+                              key={item.name}
+                              className="flex items-center justify-between gap-2 text-sm"
                             >
 
                               <div className="flex min-w-0 items-center gap-2">
 
                                 <div
-                                  className="h-3 w-3 shrink-0 rounded-full"
+                                  className="h-2.5 w-2.5 shrink-0 rounded-full"
                                   style={{
                                     backgroundColor:
                                       chartColors[
@@ -1266,61 +1052,132 @@ export default function DashboardPage() {
                                 />
 
                                 <span className="truncate text-slate-600">
-                                  {
-                                    item.name
-                                  }
+                                  {item.name}
                                 </span>
 
                               </div>
 
-                              <span className="shrink-0 font-semibold">
-
-                                {displayCurrency ===
-                                "AUD"
-                                  ? formatAUD(
-                                      item.value
-                                    )
-                                  : formatIDR(
-                                      item.value
-                                    )}
-
+                              <span className="shrink-0 text-xs font-semibold sm:text-sm">
+                                {displayCurrency === "AUD"
+                                  ? formatAUD(item.value)
+                                  : formatIDR(item.value)}
                               </span>
 
                             </div>
 
-                          )
-                        )}
+                          ))}
 
-                    </div>
+                      </div>
 
-                  </>
+                    </>
+                  )}
+
+                </div>
+
+              </div>
+
+              {/* =================================================
+                  SUBSCRIPTIONS
+              ================================================= */}
+
+              <div className="mt-5 min-w-0 rounded-2xl border border-slate-200 p-4 sm:p-5 lg:rounded-3xl lg:p-6">
+
+                <div className="mb-4 flex items-center justify-between">
+
+                  <div>
+                    <p className="text-xs text-slate-500 sm:text-sm">
+                      Subscriptions
+                    </p>
+
+                    <h2 className="text-lg font-bold sm:text-xl">
+                      Upcoming Renewals
+                    </h2>
+                  </div>
+
+                  <Link
+                    href="/subscriptions"
+                    className="text-sm font-semibold text-green-700"
+                  >
+                    Manage
+                  </Link>
+
+                </div>
+
+                {upcomingSubscriptions.length === 0 ? (
+
+                  <div className="rounded-2xl border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500">
+                    No active subscriptions.
+                  </div>
+
+                ) : (
+
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+
+                    {upcomingSubscriptions.map(
+                      (subscription) => (
+
+                        <Link
+                          href="/subscriptions"
+                          key={subscription.id}
+                          className="rounded-2xl bg-slate-50 p-4 transition hover:bg-slate-100"
+                        >
+
+                          <div className="flex items-start justify-between gap-2">
+
+                            <div className="min-w-0">
+
+                              <p className="truncate font-semibold">
+                                {subscription.name}
+                              </p>
+
+                              <p className="mt-1 text-xs capitalize text-slate-500">
+                                {subscription.billing_cycle}
+                              </p>
+
+                            </div>
+
+                            <p className="shrink-0 text-sm font-bold">
+                              {formatMoney(
+                                Number(subscription.amount)
+                              )}
+                            </p>
+
+                          </div>
+
+                          <div className="mt-3 flex items-center gap-2 text-xs text-slate-500">
+
+                            <CalendarDays size={14} />
+
+                            {subscription.next_payment_date}
+
+                          </div>
+
+                        </Link>
+
+                      )
+                    )}
+
+                  </div>
+
                 )}
 
               </div>
 
-            </div>
-
-            {/* =================================================
-                BOTTOM SECTION
-            ================================================= */}
-
-            <div className="mt-6 grid gap-4 xl:grid-cols-[1.6fr_1fr]">
-
               {/* =================================================
-                  TRANSACTIONS
+                  RECENT TRANSACTIONS
               ================================================= */}
 
-              <div className="min-w-0 rounded-3xl border border-slate-200 p-5 md:p-6">
+              <div className="mt-5 min-w-0 rounded-2xl border border-slate-200 p-4 sm:p-5 lg:rounded-3xl lg:p-6">
 
-                <div className="mb-5 flex items-center justify-between">
+                <div className="mb-4 flex items-center justify-between">
 
                   <div>
 
-                    <p className="text-sm text-slate-500">
+                    <p className="text-xs text-slate-500 sm:text-sm">
                       Recent Transactions
                     </p>
 
-                    <h2 className="text-2xl font-bold">
+                    <h2 className="text-lg font-bold sm:text-xl">
                       Activity
                     </h2>
 
@@ -1328,7 +1185,7 @@ export default function DashboardPage() {
 
                   <Link
                     href="/transactions/new"
-                    className="rounded-xl bg-[#214f45] px-4 py-2 text-sm font-semibold text-white"
+                    className="rounded-xl bg-[#214f45] px-3 py-2 text-xs font-semibold text-white sm:px-4 sm:text-sm"
                   >
                     + Add
                   </Link>
@@ -1337,240 +1194,170 @@ export default function DashboardPage() {
 
                 {loading ? (
 
-                  <p className="text-slate-500">
+                  <p className="text-sm text-slate-500">
                     Loading...
                   </p>
 
-                ) : recentTransactions.length ===
-                  0 ? (
+                ) : recentTransactions.length === 0 ? (
 
-                  <div className="rounded-2xl border border-dashed border-slate-300 p-8 text-center text-slate-500">
+                  <div className="rounded-2xl border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500">
                     No transactions yet.
                   </div>
 
                 ) : (
+                  <>
 
-                  <div className="overflow-x-auto">
+                    {/* MOBILE TRANSACTION CARDS */}
 
-                    <table className="w-full min-w-[650px] text-sm">
+                    <div className="space-y-3 md:hidden">
 
-                      <thead>
+                      {recentTransactions.map(
+                        (transaction) => (
 
-                        <tr className="border-b text-left text-slate-500">
-
-                          <th className="pb-3">
-                            Name
-                          </th>
-
-                          <th className="pb-3">
-                            Date
-                          </th>
-
-                          <th className="pb-3">
-                            Category
-                          </th>
-
-                          <th className="pb-3 text-right">
-                            Amount
-                          </th>
-
-                        </tr>
-
-                      </thead>
-
-                      <tbody>
-
-                        {recentTransactions.map(
-                          (
-                            transaction
-                          ) => (
-
-                            <tr
-                              key={
-                                transaction.id
-                              }
-                              className="border-b last:border-b-0"
-                            >
-
-                              <td className="py-4 font-medium">
-                                {
-                                  transaction.description
-                                }
-                              </td>
-
-                              <td className="py-4 text-slate-500">
-                                {
-                                  transaction.date
-                                }
-                              </td>
-
-                              <td className="py-4 text-slate-500">
-                                {transaction.category ||
-                                  "Other"}
-                              </td>
-
-                              <td
-                                className={`py-4 text-right font-semibold ${
-                                  transaction.type ===
-                                  "income"
-                                    ? "text-green-600"
-                                    : "text-red-600"
-                                }`}
-                              >
-
-                                {transaction.type ===
-                                "income"
-                                  ? "+"
-                                  : "-"}
-
-                                {formatMoney(
-                                  Number(
-                                    transaction.amount
-                                  )
-                                )}
-
-                              </td>
-
-                            </tr>
-
-                          )
-                        )}
-
-                      </tbody>
-
-                    </table>
-
-                  </div>
-
-                )}
-
-              </div>
-
-              {/* =================================================
-                  SUBSCRIPTIONS
-              ================================================= */}
-
-              <div className="min-w-0 rounded-3xl border border-slate-200 p-5 md:p-6">
-
-                <div className="mb-5 flex items-center justify-between gap-4">
-
-                  <div>
-
-                    <p className="text-sm text-slate-500">
-                      Subscription Manager
-                    </p>
-
-                    <h2 className="text-2xl font-bold">
-                      Renewals
-                    </h2>
-
-                  </div>
-
-                  <Link
-                    href="/subscriptions"
-                    className="shrink-0 text-sm font-semibold text-green-700"
-                  >
-                    Manage
-                  </Link>
-
-                </div>
-
-                {upcomingSubscriptions.length ===
-                0 ? (
-
-                  <div className="rounded-2xl border border-dashed border-slate-300 p-8 text-center text-slate-500">
-                    No active subscriptions.
-                  </div>
-
-                ) : (
-
-                  <div className="space-y-4">
-
-                    {upcomingSubscriptions.map(
-                      (
-                        subscription
-                      ) => (
-
-                        <div
-                          key={
-                            subscription.id
-                          }
-                          className="rounded-2xl bg-slate-50 p-4"
-                        >
-
-                          <div className="flex items-start justify-between gap-3">
+                          <div
+                            key={transaction.id}
+                            className="flex items-center justify-between gap-3 rounded-2xl bg-slate-50 p-4"
+                          >
 
                             <div className="min-w-0">
 
                               <p className="truncate font-semibold">
-                                {
-                                  subscription.name
-                                }
+                                {transaction.description}
                               </p>
 
-                              <p className="mt-1 text-sm capitalize text-slate-500">
-
-                                {subscription.category ||
-                                  "Other"}
-
+                              <p className="mt-1 text-xs text-slate-500">
+                                {transaction.category || "Other"}
                                 {" • "}
-
-                                {
-                                  subscription.billing_cycle
-                                }
-
+                                {transaction.date}
                               </p>
 
                             </div>
 
-                            <p className="shrink-0 font-bold">
-                              {formatMoney(
-                                Number(
-                                  subscription.amount
-                                )
-                              )}
-                            </p>
+                            <div className="shrink-0 text-right">
+
+                              <p
+                                className={`font-semibold ${
+                                  transaction.type === "income"
+                                    ? "text-green-600"
+                                    : "text-red-600"
+                                }`}
+                              >
+                                {transaction.type === "income"
+                                  ? "+"
+                                  : "-"}
+
+                                {formatMoney(
+                                  Number(transaction.amount)
+                                )}
+                              </p>
+
+                              {transaction.currency &&
+                                transaction.original_amount && (
+                                  <p className="mt-1 text-xs text-slate-400">
+                                    Original:{" "}
+                                    {transaction.currency === "AUD"
+                                      ? formatAUD(
+                                          Number(
+                                            transaction.original_amount
+                                          )
+                                        )
+                                      : formatIDR(
+                                          Number(
+                                            transaction.original_amount
+                                          )
+                                        )}
+                                  </p>
+                                )}
+
+                            </div>
 
                           </div>
 
-                          <div className="mt-3 flex items-center gap-2 text-sm text-slate-500">
+                        )
+                      )}
 
-                            <CalendarDays
-                              size={15}
-                            />
+                    </div>
 
-                            Renews{" "}
-                            {
-                              subscription.next_payment_date
-                            }
+                    {/* DESKTOP TABLE */}
 
-                          </div>
+                    <div className="hidden overflow-x-auto md:block">
 
-                          {subscription.reminder_enabled && (
+                      <table className="w-full min-w-[650px] text-sm">
 
-                            <p className="mt-1 text-sm text-slate-500">
+                        <thead>
 
-                              Reminder{" "}
-                              {
-                                subscription.reminder_days_before
-                              }{" "}
-                              days before at{" "}
-                              {subscription.reminder_time?.slice(
-                                0,
-                                5
-                              )}
+                          <tr className="border-b text-left text-slate-500">
 
-                            </p>
+                            <th className="pb-3">
+                              Name
+                            </th>
 
+                            <th className="pb-3">
+                              Date
+                            </th>
+
+                            <th className="pb-3">
+                              Category
+                            </th>
+
+                            <th className="pb-3 text-right">
+                              Amount
+                            </th>
+
+                          </tr>
+
+                        </thead>
+
+                        <tbody>
+
+                          {recentTransactions.map(
+                            (transaction) => (
+
+                              <tr
+                                key={transaction.id}
+                                className="border-b last:border-b-0"
+                              >
+
+                                <td className="py-4 font-medium">
+                                  {transaction.description}
+                                </td>
+
+                                <td className="py-4 text-slate-500">
+                                  {transaction.date}
+                                </td>
+
+                                <td className="py-4 text-slate-500">
+                                  {transaction.category || "Other"}
+                                </td>
+
+                                <td
+                                  className={`py-4 text-right font-semibold ${
+                                    transaction.type === "income"
+                                      ? "text-green-600"
+                                      : "text-red-600"
+                                  }`}
+                                >
+                                  {transaction.type === "income"
+                                    ? "+"
+                                    : "-"}
+
+                                  {formatMoney(
+                                    Number(transaction.amount)
+                                  )}
+                                </td>
+
+                              </tr>
+
+                            )
                           )}
 
-                        </div>
+                        </tbody>
 
-                      )
-                    )}
+                      </table>
 
-                  </div>
+                    </div>
 
+                  </>
                 )}
 
               </div>
@@ -1582,6 +1369,75 @@ export default function DashboardPage() {
         </div>
 
       </div>
+
+      {/* =================================================
+          MOBILE BOTTOM NAVIGATION
+      ================================================= */}
+
+      <nav className="fixed bottom-0 left-0 right-0 z-50 border-t border-slate-200 bg-white px-2 pb-[max(8px,env(safe-area-inset-bottom))] pt-2 shadow-[0_-4px_20px_rgba(0,0,0,0.05)] lg:hidden">
+
+        <div className="mx-auto grid max-w-md grid-cols-5 items-end">
+
+          <Link
+            href="/"
+            className="flex flex-col items-center gap-1 py-1 text-green-800"
+          >
+            <LayoutDashboard size={20} />
+            <span className="text-[10px] font-semibold">
+              Home
+            </span>
+          </Link>
+
+          <Link
+            href="/transactions/new"
+            className="flex flex-col items-center gap-1 py-1 text-slate-500"
+          >
+            <ArrowLeftRight size={20} />
+            <span className="text-[10px]">
+              Transactions
+            </span>
+          </Link>
+
+          {/* CENTER SCAN BUTTON */}
+
+          <Link
+            href="/scan"
+            className="-mt-6 flex flex-col items-center"
+          >
+
+            <div className="flex h-14 w-14 items-center justify-center rounded-full border-4 border-white bg-green-800 text-white shadow-lg">
+              <Camera size={23} />
+            </div>
+
+            <span className="mt-1 text-[10px] font-semibold text-green-800">
+              Scan
+            </span>
+
+          </Link>
+
+          <Link
+            href="/subscriptions"
+            className="flex flex-col items-center gap-1 py-1 text-slate-500"
+          >
+            <Repeat2 size={20} />
+            <span className="text-[10px]">
+              Subs
+            </span>
+          </Link>
+
+          <Link
+            href="/analysis"
+            className="flex flex-col items-center gap-1 py-1 text-slate-500"
+          >
+            <Sparkles size={20} />
+            <span className="text-[10px]">
+              AI
+            </span>
+          </Link>
+
+        </div>
+
+      </nav>
 
     </main>
   );
