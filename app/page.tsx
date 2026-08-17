@@ -18,6 +18,7 @@ import {
   Search,
   Bell,
   CalendarDays,
+  RefreshCw,
 } from "lucide-react";
 
 import {
@@ -33,6 +34,10 @@ import {
   Cell,
   Legend,
 } from "recharts";
+
+/* =========================================================
+   TYPES
+========================================================= */
 
 type Transaction = {
   id: string;
@@ -59,9 +64,12 @@ type Subscription = {
 
 type Currency = "AUD" | "IDR";
 
-// Temporary fixed rate.
-// Later we can replace this with a live FX API.
-const AUD_TO_IDR = 12600;
+/* =========================================================
+   CONSTANTS
+========================================================= */
+
+// Only used if our live exchange-rate API fails.
+const FALLBACK_AUD_TO_IDR = 12600;
 
 const chartColors = [
   "#214f45",
@@ -72,6 +80,10 @@ const chartColors = [
   "#8b5cf6",
   "#14b8a6",
 ];
+
+/* =========================================================
+   FORMATTERS
+========================================================= */
 
 function formatAUD(value: number) {
   return new Intl.NumberFormat("en-AU", {
@@ -93,7 +105,7 @@ function formatCompactNumber(
   value: number,
   currency: Currency
 ) {
-  const compact = new Intl.NumberFormat(
+  const formatted = new Intl.NumberFormat(
     currency === "AUD" ? "en-AU" : "id-ID",
     {
       notation: "compact",
@@ -102,11 +114,19 @@ function formatCompactNumber(
   ).format(value);
 
   return currency === "AUD"
-    ? `A$${compact}`
-    : `Rp${compact}`;
+    ? `A$${formatted}`
+    : `Rp${formatted}`;
 }
 
+/* =========================================================
+   DASHBOARD
+========================================================= */
+
 export default function DashboardPage() {
+  /* -------------------------------------------------------
+     DATA
+  ------------------------------------------------------- */
+
   const [transactions, setTransactions] =
     useState<Transaction[]>([]);
 
@@ -115,18 +135,40 @@ export default function DashboardPage() {
 
   const [loading, setLoading] = useState(true);
 
+  /* -------------------------------------------------------
+     CURRENCY
+  ------------------------------------------------------- */
+
   const [displayCurrency, setDisplayCurrency] =
     useState<Currency>("AUD");
+
+  const [audToIdr, setAudToIdr] =
+    useState(FALLBACK_AUD_TO_IDR);
+
+  const [exchangeRateDate, setExchangeRateDate] =
+    useState<string | null>(null);
+
+  const [exchangeRateLoading, setExchangeRateLoading] =
+    useState(true);
+
+  const [usingFallbackRate, setUsingFallbackRate] =
+    useState(false);
+
+  /* =======================================================
+     LOAD SUPABASE DATA
+  ======================================================= */
 
   async function loadDashboardData() {
     setLoading(true);
 
-    const [transactionsRes, subscriptionsRes] =
+    const [transactionsResult, subscriptionsResult] =
       await Promise.all([
         supabase
           .from("transactions")
           .select("*")
-          .order("date", { ascending: false }),
+          .order("date", {
+            ascending: false,
+          }),
 
         supabase
           .from("subscriptions")
@@ -136,49 +178,124 @@ export default function DashboardPage() {
           }),
       ]);
 
-    if (transactionsRes.error) {
+    if (transactionsResult.error) {
       console.error(
-        "Transactions error:",
-        transactionsRes.error
+        "Transaction error:",
+        transactionsResult.error
       );
     }
 
-    if (subscriptionsRes.error) {
+    if (subscriptionsResult.error) {
       console.error(
-        "Subscriptions error:",
-        subscriptionsRes.error
+        "Subscription error:",
+        subscriptionsResult.error
       );
     }
 
     setTransactions(
-      (transactionsRes.data as Transaction[]) ?? []
+      (transactionsResult.data as Transaction[]) ?? []
     );
 
     setSubscriptions(
-      (subscriptionsRes.data as Subscription[]) ?? []
+      (subscriptionsResult.data as Subscription[]) ?? []
     );
 
     setLoading(false);
   }
 
+  /* =======================================================
+     LOAD EXCHANGE RATE
+  ======================================================= */
+
+  async function loadExchangeRate() {
+    try {
+      setExchangeRateLoading(true);
+      setUsingFallbackRate(false);
+
+      const response = await fetch(
+        "/api/exchange-rate",
+        {
+          cache: "no-store",
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(
+          "Could not fetch exchange rate"
+        );
+      }
+
+      const data = await response.json();
+
+      const rate = Number(data.rate);
+
+      if (
+        !Number.isFinite(rate) ||
+        rate <= 0
+      ) {
+        throw new Error(
+          "Invalid exchange rate returned"
+        );
+      }
+
+      setAudToIdr(rate);
+      setExchangeRateDate(
+        data.date ?? null
+      );
+    } catch (error) {
+      console.error(
+        "Exchange rate error:",
+        error
+      );
+
+      setAudToIdr(
+        FALLBACK_AUD_TO_IDR
+      );
+
+      setExchangeRateDate(null);
+      setUsingFallbackRate(true);
+    } finally {
+      setExchangeRateLoading(false);
+    }
+  }
+
+  /* =======================================================
+     INITIAL LOAD
+  ======================================================= */
+
   useEffect(() => {
     loadDashboardData();
+    loadExchangeRate();
   }, []);
 
-  const activeSubscriptions = useMemo(() => {
-    return subscriptions.filter(
-      (subscription) =>
-        subscription.status === "active"
-    );
-  }, [subscriptions]);
+  /* =======================================================
+     ACTIVE SUBSCRIPTIONS
+  ======================================================= */
+
+  const activeSubscriptions =
+    useMemo(() => {
+      return subscriptions.filter(
+        (subscription) =>
+          subscription.status ===
+          "active"
+      );
+    }, [subscriptions]);
+
+  /* =======================================================
+     MONTHLY SUBSCRIPTION COST
+  ======================================================= */
 
   const estimatedMonthlySubscriptionCost =
     useMemo(() => {
       return activeSubscriptions.reduce(
-        (total, subscription) => {
-          const amount = Number(
-            subscription.amount
-          );
+        (
+          total,
+          subscription
+        ) => {
+          const amount =
+            Number(
+              subscription.amount
+            );
 
           if (
             subscription.billing_cycle ===
@@ -194,7 +311,9 @@ export default function DashboardPage() {
             subscription.billing_cycle ===
             "yearly"
           ) {
-            return total + amount / 12;
+            return (
+              total + amount / 12
+            );
           }
 
           return total + amount;
@@ -203,145 +322,200 @@ export default function DashboardPage() {
       );
     }, [activeSubscriptions]);
 
-  const totalIncome = useMemo(() => {
-    return transactions
-      .filter(
-        (transaction) =>
-          transaction.type === "income"
-      )
-      .reduce(
-        (sum, transaction) =>
-          sum + Number(transaction.amount),
-        0
-      );
-  }, [transactions]);
+  /* =======================================================
+     FINANCIAL TOTALS
+  ======================================================= */
 
-  const totalExpenses = useMemo(() => {
-    return transactions
-      .filter(
-        (transaction) =>
-          transaction.type === "expense"
-      )
-      .reduce(
-        (sum, transaction) =>
-          sum + Number(transaction.amount),
-        0
-      );
-  }, [transactions]);
+  const totalIncome =
+    useMemo(() => {
+      return transactions
+        .filter(
+          (transaction) =>
+            transaction.type ===
+            "income"
+        )
+        .reduce(
+          (
+            total,
+            transaction
+          ) =>
+            total +
+            Number(
+              transaction.amount
+            ),
+          0
+        );
+    }, [transactions]);
+
+  const totalExpenses =
+    useMemo(() => {
+      return transactions
+        .filter(
+          (transaction) =>
+            transaction.type ===
+            "expense"
+        )
+        .reduce(
+          (
+            total,
+            transaction
+          ) =>
+            total +
+            Number(
+              transaction.amount
+            ),
+          0
+        );
+    }, [transactions]);
 
   const totalBalance =
-    totalIncome - totalExpenses;
+    totalIncome -
+    totalExpenses;
 
-  function formatMoney(audValue: number) {
-    if (displayCurrency === "AUD") {
+  /* =======================================================
+     MONEY DISPLAY
+  ======================================================= */
+
+  function formatMoney(
+    audValue: number
+  ) {
+    if (
+      displayCurrency === "AUD"
+    ) {
       return formatAUD(audValue);
     }
 
     return formatIDR(
-      audValue * AUD_TO_IDR
+      audValue * audToIdr
     );
   }
 
-  const last6MonthsData = useMemo(() => {
-    const now = new Date();
+  /* =======================================================
+     CASHFLOW CHART DATA
+  ======================================================= */
 
-    const months: {
-      key: string;
-      label: string;
-      income: number;
-      expense: number;
-    }[] = [];
+  const last6MonthsData =
+    useMemo(() => {
+      const now = new Date();
 
-    for (let i = 5; i >= 0; i--) {
-      const date = new Date(
-        now.getFullYear(),
-        now.getMonth() - i,
-        1
-      );
+      const months: {
+        key: string;
+        label: string;
+        income: number;
+        expense: number;
+      }[] = [];
 
-      const key = `${date.getFullYear()}-${String(
-        date.getMonth() + 1
-      ).padStart(2, "0")}`;
-
-      months.push({
-        key,
-        label: date.toLocaleString(
-          "en-AU",
-          {
-            month: "short",
-          }
-        ),
-        income: 0,
-        expense: 0,
-      });
-    }
-
-    transactions.forEach(
-      (transaction) => {
-        const date = new Date(
-          transaction.date
-        );
+      for (
+        let i = 5;
+        i >= 0;
+        i--
+      ) {
+        const date =
+          new Date(
+            now.getFullYear(),
+            now.getMonth() - i,
+            1
+          );
 
         const key = `${date.getFullYear()}-${String(
           date.getMonth() + 1
         ).padStart(2, "0")}`;
 
-        const monthEntry =
-          months.find(
-            (month) =>
-              month.key === key
-          );
+        months.push({
+          key,
 
-        if (!monthEntry) return;
+          label:
+            date.toLocaleString(
+              "en-AU",
+              {
+                month: "short",
+              }
+            ),
 
-        if (
-          transaction.type ===
-          "income"
-        ) {
-          monthEntry.income +=
-            Number(
-              transaction.amount
-            );
-        } else {
-          monthEntry.expense +=
-            Number(
-              transaction.amount
-            );
-        }
+          income: 0,
+
+          expense: 0,
+        });
       }
-    );
 
-    const converted =
-      months.map((month) => ({
-        month: month.label,
+      transactions.forEach(
+        (transaction) => {
+          const transactionDate =
+            new Date(
+              transaction.date
+            );
 
-        income:
-          displayCurrency === "AUD"
-            ? month.income
-            : month.income *
-              AUD_TO_IDR,
+          const key = `${transactionDate.getFullYear()}-${String(
+            transactionDate.getMonth() +
+              1
+          ).padStart(2, "0")}`;
 
-        expense:
-          displayCurrency === "AUD"
-            ? month.expense
-            : month.expense *
-              AUD_TO_IDR,
-      }));
+          const targetMonth =
+            months.find(
+              (month) =>
+                month.key === key
+            );
 
-    const nonEmpty =
-      converted.filter(
-        (month) =>
-          month.income > 0 ||
-          month.expense > 0
+          if (!targetMonth) {
+            return;
+          }
+
+          if (
+            transaction.type ===
+            "income"
+          ) {
+            targetMonth.income +=
+              Number(
+                transaction.amount
+              );
+          } else {
+            targetMonth.expense +=
+              Number(
+                transaction.amount
+              );
+          }
+        }
       );
 
-    return nonEmpty.length > 0
-      ? nonEmpty
-      : converted;
-  }, [
-    transactions,
-    displayCurrency,
-  ]);
+      const converted =
+        months.map((month) => ({
+          month: month.label,
+
+          income:
+            displayCurrency ===
+            "AUD"
+              ? month.income
+              : month.income *
+                audToIdr,
+
+          expense:
+            displayCurrency ===
+            "AUD"
+              ? month.expense
+              : month.expense *
+                audToIdr,
+        }));
+
+      const nonEmptyMonths =
+        converted.filter(
+          (month) =>
+            month.income > 0 ||
+            month.expense > 0
+        );
+
+      return nonEmptyMonths.length >
+        0
+        ? nonEmptyMonths
+        : converted;
+    }, [
+      transactions,
+      displayCurrency,
+      audToIdr,
+    ]);
+
+  /* =======================================================
+     SPENDING BREAKDOWN
+  ======================================================= */
 
   const spendingByCategory =
     useMemo(() => {
@@ -363,7 +537,8 @@ export default function DashboardPage() {
               "Other";
 
             totals[category] =
-              (totals[category] || 0) +
+              (totals[category] ||
+                0) +
               Number(
                 transaction.amount
               );
@@ -382,7 +557,7 @@ export default function DashboardPage() {
               "AUD"
                 ? value
                 : value *
-                  AUD_TO_IDR,
+                  audToIdr,
           })
         )
         .sort(
@@ -392,23 +567,41 @@ export default function DashboardPage() {
     }, [
       transactions,
       displayCurrency,
+      audToIdr,
     ]);
+
+  /* =======================================================
+     RECENT ITEMS
+  ======================================================= */
 
   const recentTransactions =
     transactions.slice(0, 5);
 
   const upcomingSubscriptions =
-    activeSubscriptions.slice(0, 5);
+    activeSubscriptions.slice(
+      0,
+      5
+    );
+
+  /* =======================================================
+     UI
+  ======================================================= */
 
   return (
     <main className="min-h-screen bg-[#eef4ee] p-4 text-slate-900 md:p-6">
+
       <div className="mx-auto max-w-7xl overflow-hidden rounded-[28px] bg-white shadow-xl">
+
         <div className="grid min-h-screen grid-cols-1 lg:grid-cols-[240px_1fr]">
 
-          {/* SIDEBAR */}
+          {/* =================================================
+              SIDEBAR
+          ================================================= */}
+
           <aside className="bg-[#eff5ea] p-5">
 
             <div className="mb-8 flex items-center gap-3">
+
               <div className="rounded-xl bg-green-800 p-3 text-white">
                 <Wallet size={20} />
               </div>
@@ -422,7 +615,10 @@ export default function DashboardPage() {
                   Personal Finance
                 </p>
               </div>
+
             </div>
+
+            {/* NAVIGATION */}
 
             <nav className="space-y-2">
 
@@ -433,6 +629,7 @@ export default function DashboardPage() {
                 <LayoutDashboard
                   size={18}
                 />
+
                 Dashboard
               </Link>
 
@@ -443,6 +640,7 @@ export default function DashboardPage() {
                 <ArrowLeftRight
                   size={18}
                 />
+
                 Transactions
               </Link>
 
@@ -451,6 +649,7 @@ export default function DashboardPage() {
                 className="flex items-center gap-3 rounded-xl px-4 py-3 text-slate-600 transition hover:bg-white"
               >
                 <Repeat2 size={18} />
+
                 Subscriptions
               </Link>
 
@@ -459,6 +658,7 @@ export default function DashboardPage() {
                 className="flex items-center gap-3 rounded-xl px-4 py-3 text-slate-600 transition hover:bg-white"
               >
                 <Camera size={18} />
+
                 Scan Receipt
               </Link>
 
@@ -466,7 +666,10 @@ export default function DashboardPage() {
                 href="/analysis"
                 className="flex items-center gap-3 rounded-xl px-4 py-3 text-slate-600 transition hover:bg-white"
               >
-                <Sparkles size={18} />
+                <Sparkles
+                  size={18}
+                />
+
                 AI Analysis
               </Link>
 
@@ -475,6 +678,7 @@ export default function DashboardPage() {
                 className="flex items-center gap-3 rounded-xl px-4 py-3 text-slate-600 transition hover:bg-white"
               >
                 <Upload size={18} />
+
                 CSV Import
               </Link>
 
@@ -482,13 +686,21 @@ export default function DashboardPage() {
                 type="button"
                 className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left text-slate-600 transition hover:bg-white"
               >
-                <Settings size={18} />
+                <Settings
+                  size={18}
+                />
+
                 Settings
               </button>
+
             </nav>
 
-            {/* CURRENCY SELECTOR */}
+            {/* =================================================
+                CURRENCY
+            ================================================= */}
+
             <div className="mt-10 rounded-2xl bg-green-900 p-5 text-white">
+
               <p className="text-sm text-green-100">
                 Display currency
               </p>
@@ -502,11 +714,11 @@ export default function DashboardPage() {
                       "AUD"
                     )
                   }
-                  className={`rounded-xl px-4 py-2 text-sm font-semibold ${
+                  className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
                     displayCurrency ===
                     "AUD"
                       ? "bg-lime-200 text-slate-900"
-                      : "bg-white/10 text-white"
+                      : "bg-white/10 text-white hover:bg-white/20"
                   }`}
                 >
                   AUD
@@ -519,11 +731,11 @@ export default function DashboardPage() {
                       "IDR"
                     )
                   }
-                  className={`rounded-xl px-4 py-2 text-sm font-semibold ${
+                  className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
                     displayCurrency ===
                     "IDR"
                       ? "bg-lime-200 text-slate-900"
-                      : "bg-white/10 text-white"
+                      : "bg-white/10 text-white hover:bg-white/20"
                   }`}
                 >
                   IDR
@@ -531,39 +743,107 @@ export default function DashboardPage() {
 
               </div>
 
-              <p className="mt-4 text-xs text-green-100">
-                1 AUD ≈{" "}
-                {formatIDR(
-                  AUD_TO_IDR
+              {/* EXCHANGE RATE */}
+
+              <div className="mt-5 rounded-xl bg-white/10 p-3">
+
+                <div className="flex items-start justify-between gap-2">
+
+                  <div>
+                    <p className="text-xs text-green-100">
+                      AUD → IDR
+                    </p>
+
+                    <p className="mt-1 text-sm font-semibold">
+                      {exchangeRateLoading
+                        ? "Loading rate..."
+                        : `1 AUD = ${formatIDR(
+                            audToIdr
+                          )}`}
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={
+                      loadExchangeRate
+                    }
+                    disabled={
+                      exchangeRateLoading
+                    }
+                    title="Refresh exchange rate"
+                    className="rounded-lg p-2 transition hover:bg-white/10 disabled:opacity-50"
+                  >
+                    <RefreshCw
+                      size={15}
+                      className={
+                        exchangeRateLoading
+                          ? "animate-spin"
+                          : ""
+                      }
+                    />
+                  </button>
+
+                </div>
+
+                {exchangeRateDate &&
+                  !usingFallbackRate && (
+                    <p className="mt-2 text-xs text-green-200">
+                      Rate date:{" "}
+                      {
+                        exchangeRateDate
+                      }
+                    </p>
+                  )}
+
+                {usingFallbackRate && (
+                  <p className="mt-2 text-xs text-amber-200">
+                    Live rate unavailable.
+                    Using fallback rate.
+                  </p>
                 )}
-              </p>
+
+              </div>
+
             </div>
+
           </aside>
 
-          {/* MAIN CONTENT */}
+          {/* =================================================
+              MAIN
+          ================================================= */}
+
           <section className="min-w-0 p-5 md:p-6">
 
             {/* TOP BAR */}
+
             <div className="mb-6 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
 
               <div>
+
                 <h1 className="text-3xl font-bold">
                   Dashboard
                 </h1>
 
                 <p className="mt-1 text-slate-500">
-                  Overview of your finances, cash flow, and subscriptions
+                  Overview of your finances,
+                  cash flow, and subscriptions
                 </p>
+
               </div>
 
               <div className="flex flex-wrap items-center gap-3">
 
                 <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-slate-500">
-                  <Search size={18} />
+
+                  <Search
+                    size={18}
+                  />
 
                   <span className="text-sm">
                     Search transaction...
                   </span>
+
                 </div>
 
                 <button
@@ -575,19 +855,27 @@ export default function DashboardPage() {
 
                 <Link
                   href="/scan"
-                  className="flex items-center gap-2 rounded-2xl bg-green-800 px-4 py-3 text-sm font-semibold text-white"
+                  className="flex items-center gap-2 rounded-2xl bg-green-800 px-4 py-3 text-sm font-semibold text-white transition hover:bg-green-900"
                 >
                   <Camera size={18} />
-                  Scan
+
+                  Scan Receipt
                 </Link>
 
               </div>
+
             </div>
 
-            {/* SUMMARY CARDS */}
+            {/* =================================================
+                SUMMARY CARDS
+            ================================================= */}
+
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
 
-              <div className="rounded-3xl bg-[#214f45] p-6 text-white">
+              {/* BALANCE */}
+
+              <div className="min-w-0 rounded-3xl bg-[#214f45] p-6 text-white">
+
                 <p className="text-sm text-green-100">
                   Total Balance
                 </p>
@@ -601,9 +889,13 @@ export default function DashboardPage() {
                 <p className="mt-2 text-sm text-green-100">
                   Net position
                 </p>
+
               </div>
 
-              <div className="rounded-3xl border border-slate-200 p-6">
+              {/* INCOME */}
+
+              <div className="min-w-0 rounded-3xl border border-slate-200 p-6">
+
                 <p className="text-sm text-slate-500">
                   Total Income
                 </p>
@@ -615,14 +907,21 @@ export default function DashboardPage() {
                 </p>
 
                 <p className="mt-2 flex items-center gap-2 text-sm text-green-600">
+
                   <TrendingUp
                     size={16}
                   />
+
                   Money coming in
+
                 </p>
+
               </div>
 
-              <div className="rounded-3xl border border-slate-200 p-6">
+              {/* EXPENSES */}
+
+              <div className="min-w-0 rounded-3xl border border-slate-200 p-6">
+
                 <p className="text-sm text-slate-500">
                   Total Expenses
                 </p>
@@ -634,14 +933,21 @@ export default function DashboardPage() {
                 </p>
 
                 <p className="mt-2 flex items-center gap-2 text-sm text-red-600">
+
                   <TrendingDown
                     size={16}
                   />
+
                   Money going out
+
                 </p>
+
               </div>
 
-              <div className="rounded-3xl border border-slate-200 p-6">
+              {/* SUBSCRIPTIONS */}
+
+              <div className="min-w-0 rounded-3xl border border-slate-200 p-6">
+
                 <p className="text-sm text-slate-500">
                   Subscriptions / Month
                 </p>
@@ -658,17 +964,25 @@ export default function DashboardPage() {
                   }{" "}
                   active subscriptions
                 </p>
+
               </div>
+
             </div>
 
-            {/* CHART AREA */}
+            {/* =================================================
+                CHARTS
+            ================================================= */}
+
             <div className="mt-6 grid gap-4 xl:grid-cols-[1.7fr_1fr]">
 
-              {/* CASHFLOW */}
+              {/* CASH FLOW */}
+
               <div className="min-w-0 rounded-3xl border border-slate-200 p-5 md:p-6">
 
                 <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+
                   <div>
+
                     <p className="text-sm text-slate-500">
                       Cashflow
                     </p>
@@ -676,18 +990,22 @@ export default function DashboardPage() {
                     <h2 className="text-2xl font-bold">
                       Income vs Spending
                     </h2>
+
                   </div>
 
                   <p className="text-sm text-slate-500">
                     Last 6 months
                   </p>
+
                 </div>
 
                 <div className="h-[340px] w-full min-w-0">
+
                   <ResponsiveContainer
                     width="100%"
                     height="100%"
                   >
+
                     <BarChart
                       data={
                         last6MonthsData
@@ -728,7 +1046,8 @@ export default function DashboardPage() {
                           (
                             dataMax: number
                           ) =>
-                            dataMax === 0
+                            dataMax ===
+                            0
                               ? 100
                               : Math.ceil(
                                   dataMax *
@@ -752,23 +1071,23 @@ export default function DashboardPage() {
                           value,
                           name
                         ) => {
-                          const numericValue =
+                          const numberValue =
                             Number(
                               value
                             );
 
-                          const formattedValue =
+                          const formatted =
                             displayCurrency ===
                             "AUD"
                               ? formatAUD(
-                                  numericValue
+                                  numberValue
                                 )
                               : formatIDR(
-                                  numericValue
+                                  numberValue
                                 );
 
                           return [
-                            formattedValue,
+                            formatted,
                             name,
                           ];
                         }}
@@ -803,14 +1122,21 @@ export default function DashboardPage() {
                       />
 
                     </BarChart>
+
                   </ResponsiveContainer>
+
                 </div>
+
               </div>
 
-              {/* SPENDING BREAKDOWN */}
+              {/* =================================================
+                  SPENDING BREAKDOWN
+              ================================================= */}
+
               <div className="min-w-0 rounded-3xl border border-slate-200 p-5 md:p-6">
 
                 <div className="mb-4">
+
                   <p className="text-sm text-slate-500">
                     Statistics
                   </p>
@@ -818,20 +1144,26 @@ export default function DashboardPage() {
                   <h2 className="text-2xl font-bold">
                     Spending Breakdown
                   </h2>
+
                 </div>
 
                 {spendingByCategory.length ===
                 0 ? (
+
                   <div className="flex h-[320px] items-center justify-center rounded-2xl border border-dashed border-slate-300 text-center text-slate-500">
                     No spending data yet.
                   </div>
+
                 ) : (
                   <>
+
                     <div className="h-[240px] w-full min-w-0">
+
                       <ResponsiveContainer
                         width="100%"
                         height="100%"
                       >
+
                         <PieChart>
 
                           <Pie
@@ -844,11 +1176,13 @@ export default function DashboardPage() {
                             outerRadius={85}
                             paddingAngle={3}
                           >
+
                             {spendingByCategory.map(
                               (
                                 entry,
                                 index
                               ) => (
+
                                 <Cell
                                   key={
                                     entry.name
@@ -860,8 +1194,10 @@ export default function DashboardPage() {
                                     ]
                                   }
                                 />
+
                               )
                             )}
+
                           </Pie>
 
                           <Tooltip
@@ -869,33 +1205,38 @@ export default function DashboardPage() {
                               value,
                               name
                             ) => {
-                              const numericValue =
+                              const numberValue =
                                 Number(
                                   value
                                 );
 
-                              const formattedValue =
+                              const formatted =
                                 displayCurrency ===
                                 "AUD"
                                   ? formatAUD(
-                                      numericValue
+                                      numberValue
                                     )
                                   : formatIDR(
-                                      numericValue
+                                      numberValue
                                     );
 
                               return [
-                                formattedValue,
+                                formatted,
                                 name,
                               ];
                             }}
                           />
 
                         </PieChart>
+
                       </ResponsiveContainer>
+
                     </div>
 
+                    {/* CATEGORY LIST */}
+
                     <div className="mt-4 space-y-3">
+
                       {spendingByCategory
                         .slice(0, 5)
                         .map(
@@ -903,12 +1244,14 @@ export default function DashboardPage() {
                             item,
                             index
                           ) => (
+
                             <div
                               key={
                                 item.name
                               }
                               className="flex items-center justify-between gap-3 text-sm"
                             >
+
                               <div className="flex min-w-0 items-center gap-2">
 
                                 <div
@@ -931,6 +1274,7 @@ export default function DashboardPage() {
                               </div>
 
                               <span className="shrink-0 font-semibold">
+
                                 {displayCurrency ===
                                 "AUD"
                                   ? formatAUD(
@@ -939,25 +1283,39 @@ export default function DashboardPage() {
                                   : formatIDR(
                                       item.value
                                     )}
+
                               </span>
+
                             </div>
+
                           )
                         )}
+
                     </div>
+
                   </>
                 )}
+
               </div>
+
             </div>
 
-            {/* BOTTOM */}
+            {/* =================================================
+                BOTTOM SECTION
+            ================================================= */}
+
             <div className="mt-6 grid gap-4 xl:grid-cols-[1.6fr_1fr]">
 
-              {/* RECENT TRANSACTIONS */}
+              {/* =================================================
+                  TRANSACTIONS
+              ================================================= */}
+
               <div className="min-w-0 rounded-3xl border border-slate-200 p-5 md:p-6">
 
                 <div className="mb-5 flex items-center justify-between">
 
                   <div>
+
                     <p className="text-sm text-slate-500">
                       Recent Transactions
                     </p>
@@ -965,6 +1323,7 @@ export default function DashboardPage() {
                     <h2 className="text-2xl font-bold">
                       Activity
                     </h2>
+
                   </div>
 
                   <Link
@@ -973,24 +1332,32 @@ export default function DashboardPage() {
                   >
                     + Add
                   </Link>
+
                 </div>
 
                 {loading ? (
+
                   <p className="text-slate-500">
                     Loading...
                   </p>
+
                 ) : recentTransactions.length ===
                   0 ? (
+
                   <div className="rounded-2xl border border-dashed border-slate-300 p-8 text-center text-slate-500">
                     No transactions yet.
                   </div>
+
                 ) : (
+
                   <div className="overflow-x-auto">
 
-                    <table className="min-w-[650px] w-full text-sm">
+                    <table className="w-full min-w-[650px] text-sm">
 
                       <thead>
+
                         <tr className="border-b text-left text-slate-500">
+
                           <th className="pb-3">
                             Name
                           </th>
@@ -1006,14 +1373,18 @@ export default function DashboardPage() {
                           <th className="pb-3 text-right">
                             Amount
                           </th>
+
                         </tr>
+
                       </thead>
 
                       <tbody>
+
                         {recentTransactions.map(
                           (
                             transaction
                           ) => (
+
                             <tr
                               key={
                                 transaction.id
@@ -1046,6 +1417,7 @@ export default function DashboardPage() {
                                     : "text-red-600"
                                 }`}
                               >
+
                                 {transaction.type ===
                                 "income"
                                   ? "+"
@@ -1056,24 +1428,34 @@ export default function DashboardPage() {
                                     transaction.amount
                                   )
                                 )}
+
                               </td>
 
                             </tr>
+
                           )
                         )}
+
                       </tbody>
 
                     </table>
+
                   </div>
+
                 )}
+
               </div>
 
-              {/* SUBSCRIPTIONS */}
+              {/* =================================================
+                  SUBSCRIPTIONS
+              ================================================= */}
+
               <div className="min-w-0 rounded-3xl border border-slate-200 p-5 md:p-6">
 
                 <div className="mb-5 flex items-center justify-between gap-4">
 
                   <div>
+
                     <p className="text-sm text-slate-500">
                       Subscription Manager
                     </p>
@@ -1081,6 +1463,7 @@ export default function DashboardPage() {
                     <h2 className="text-2xl font-bold">
                       Renewals
                     </h2>
+
                   </div>
 
                   <Link
@@ -1089,20 +1472,25 @@ export default function DashboardPage() {
                   >
                     Manage
                   </Link>
+
                 </div>
 
                 {upcomingSubscriptions.length ===
                 0 ? (
+
                   <div className="rounded-2xl border border-dashed border-slate-300 p-8 text-center text-slate-500">
                     No active subscriptions.
                   </div>
+
                 ) : (
+
                   <div className="space-y-4">
 
                     {upcomingSubscriptions.map(
                       (
                         subscription
                       ) => (
+
                         <div
                           key={
                             subscription.id
@@ -1120,13 +1508,17 @@ export default function DashboardPage() {
                                 }
                               </p>
 
-                              <p className="mt-1 text-sm text-slate-500">
+                              <p className="mt-1 text-sm capitalize text-slate-500">
+
                                 {subscription.category ||
-                                  "Other"}{" "}
-                                •{" "}
+                                  "Other"}
+
+                                {" • "}
+
                                 {
                                   subscription.billing_cycle
                                 }
+
                               </p>
 
                             </div>
@@ -1142,6 +1534,7 @@ export default function DashboardPage() {
                           </div>
 
                           <div className="mt-3 flex items-center gap-2 text-sm text-slate-500">
+
                             <CalendarDays
                               size={15}
                             />
@@ -1150,10 +1543,13 @@ export default function DashboardPage() {
                             {
                               subscription.next_payment_date
                             }
+
                           </div>
 
                           {subscription.reminder_enabled && (
+
                             <p className="mt-1 text-sm text-slate-500">
+
                               Reminder{" "}
                               {
                                 subscription.reminder_days_before
@@ -1163,20 +1559,30 @@ export default function DashboardPage() {
                                 0,
                                 5
                               )}
+
                             </p>
+
                           )}
 
                         </div>
+
                       )
                     )}
+
                   </div>
+
                 )}
+
               </div>
 
             </div>
+
           </section>
+
         </div>
+
       </div>
+
     </main>
   );
 }
