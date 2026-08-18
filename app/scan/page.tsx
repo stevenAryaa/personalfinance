@@ -9,11 +9,14 @@ import {
 import Link from "next/link";
 
 import {
+  ArrowLeft,
   Camera,
   Upload,
   X,
   Sparkles,
   Save,
+  Wallet,
+  RefreshCw,
 } from "lucide-react";
 
 import { supabase } from "@/lib/supabase";
@@ -79,10 +82,6 @@ export default function ScanReceiptPage() {
       null
     );
 
-  // --------------------------------
-  // OPEN CAMERA
-  // --------------------------------
-
   async function openCamera() {
     try {
       setError("");
@@ -94,6 +93,7 @@ export default function ScanReceiptPage() {
         setError(
           "Your browser does not support camera access."
         );
+
         return;
       }
 
@@ -121,10 +121,6 @@ export default function ScanReceiptPage() {
     }
   }
 
-  // --------------------------------
-  // ATTACH CAMERA STREAM
-  // --------------------------------
-
   useEffect(() => {
     if (
       !cameraOpen ||
@@ -148,10 +144,6 @@ export default function ScanReceiptPage() {
     });
   }, [cameraOpen, stream]);
 
-  // --------------------------------
-  // STOP CAMERA
-  // --------------------------------
-
   function stopCamera() {
     if (stream) {
       stream
@@ -170,10 +162,6 @@ export default function ScanReceiptPage() {
     setCameraOpen(false);
   }
 
-  // --------------------------------
-  // TAKE PHOTO
-  // --------------------------------
-
   function takePhoto() {
     const video =
       videoRef.current;
@@ -185,6 +173,7 @@ export default function ScanReceiptPage() {
       setError(
         "Camera is not ready."
       );
+
       return;
     }
 
@@ -195,6 +184,7 @@ export default function ScanReceiptPage() {
       setError(
         "Camera is still loading. Try again in a moment."
       );
+
       return;
     }
 
@@ -211,6 +201,7 @@ export default function ScanReceiptPage() {
       setError(
         "Could not capture image."
       );
+
       return;
     }
 
@@ -228,6 +219,7 @@ export default function ScanReceiptPage() {
           setError(
             "Could not create photo."
           );
+
           return;
         }
 
@@ -247,9 +239,7 @@ export default function ScanReceiptPage() {
         }
 
         const imageUrl =
-          URL.createObjectURL(
-            blob
-          );
+          URL.createObjectURL(blob);
 
         setImage(file);
         setPreview(imageUrl);
@@ -265,10 +255,6 @@ export default function ScanReceiptPage() {
       0.9
     );
   }
-
-  // --------------------------------
-  // UPLOAD IMAGE
-  // --------------------------------
 
   function handleUpload(
     event: React.ChangeEvent<HTMLInputElement>
@@ -286,6 +272,7 @@ export default function ScanReceiptPage() {
       setError(
         "Please upload an image."
       );
+
       return;
     }
 
@@ -308,10 +295,6 @@ export default function ScanReceiptPage() {
     stopCamera();
   }
 
-  // --------------------------------
-  // REMOVE IMAGE
-  // --------------------------------
-
   function removeImage() {
     if (preview) {
       URL.revokeObjectURL(
@@ -325,10 +308,6 @@ export default function ScanReceiptPage() {
     setSaved(false);
     setError("");
   }
-
-  // --------------------------------
-  // CONVERT IMAGE → BASE64
-  // --------------------------------
 
   function fileToBase64(
     file: File
@@ -354,15 +333,12 @@ export default function ScanReceiptPage() {
     );
   }
 
-  // --------------------------------
-  // ANALYZE WITH GROQ
-  // --------------------------------
-
   async function analyzeReceipt() {
     if (!image) {
       setError(
         "Take or upload a receipt first."
       );
+
       return;
     }
 
@@ -404,28 +380,35 @@ export default function ScanReceiptPage() {
         );
       }
 
-setDetected({
-  description: result.description || "",
+      setDetected({
+        description:
+          result.description || "",
 
-  amount: Number(result.amount) || 0,
+        amount:
+          Number(result.amount) || 0,
 
-  currency:
-    result.currency === "IDR"
-      ? "IDR"
-      : "AUD",
+        currency:
+          result.currency === "IDR"
+            ? "IDR"
+            : "AUD",
 
-  date: result.date || "",
+        date:
+          result.date || "",
 
-  type:
-    result.type === "income"
-      ? "income"
-      : "expense",
+        type:
+          result.type === "income"
+            ? "income"
+            : "expense",
 
-  category: result.category || "Other",
+        category:
+          result.category ||
+          "Other",
 
-  confidence:
-    Number(result.confidence) || 0,
-});
+        confidence:
+          Number(
+            result.confidence
+          ) || 0,
+      });
     } catch (err) {
       console.error(err);
 
@@ -437,86 +420,111 @@ setDetected({
     }
   }
 
-  // --------------------------------
-  // SAVE TO SUPABASE
-  // --------------------------------
+  async function saveTransaction() {
+    if (!detected) return;
 
-async function saveTransaction() {
-  if (!detected) return;
+    try {
+      setSaving(true);
+      setError("");
 
-  try {
-    setSaving(true);
-    setError("");
+      let normalizedAUDAmount =
+        detected.amount;
 
-    let normalizedAUDAmount = detected.amount;
+      if (
+        detected.currency === "IDR"
+      ) {
+        const rateResponse =
+          await fetch(
+            "/api/exchange-rate"
+          );
 
-    // Receipt was in IDR
-    if (detected.currency === "IDR") {
-      const rateResponse = await fetch("/api/exchange-rate");
+        if (
+          !rateResponse.ok
+        ) {
+          throw new Error(
+            "Could not get exchange rate for IDR conversion."
+          );
+        }
 
-      if (!rateResponse.ok) {
-        throw new Error(
-          "Could not get exchange rate for IDR conversion."
+        const rateData =
+          await rateResponse.json();
+
+        const audToIdr =
+          Number(
+            rateData.rate
+          );
+
+        if (
+          !audToIdr ||
+          audToIdr <= 0
+        ) {
+          throw new Error(
+            "Invalid exchange rate."
+          );
+        }
+
+        normalizedAUDAmount =
+          detected.amount /
+          audToIdr;
+      }
+
+      const { error } =
+        await supabase
+          .from("transactions")
+          .insert([
+            {
+              date:
+                detected.date,
+
+              description:
+                detected.description,
+
+              amount:
+                normalizedAUDAmount,
+
+              original_amount:
+                detected.amount,
+
+              currency:
+                detected.currency,
+
+              type:
+                detected.type,
+
+              category:
+                detected.category,
+
+              source:
+                "receipt",
+            },
+          ]);
+
+      if (error) {
+        throw error;
+      }
+
+      setSaved(true);
+    } catch (err) {
+      console.error(
+        "Save error:",
+        err
+      );
+
+      if (
+        err instanceof Error
+      ) {
+        setError(
+          err.message
+        );
+      } else {
+        setError(
+          "Could not save transaction."
         );
       }
-
-      const rateData = await rateResponse.json();
-
-      const audToIdr = Number(rateData.rate);
-
-      if (!audToIdr || audToIdr <= 0) {
-        throw new Error("Invalid exchange rate.");
-      }
-
-      // Example:
-      // Rp126,000 / 12,600 = A$10
-      normalizedAUDAmount =
-        detected.amount / audToIdr;
+    } finally {
+      setSaving(false);
     }
-
-    const { error } = await supabase
-      .from("transactions")
-      .insert([
-        {
-          date: detected.date,
-          description: detected.description,
-
-          // AUD normalized amount
-          amount: normalizedAUDAmount,
-
-          // Original receipt amount
-          original_amount: detected.amount,
-
-          currency: detected.currency,
-
-          type: detected.type,
-          category: detected.category,
-
-          source: "receipt",
-        },
-      ]);
-
-    if (error) {
-      throw error;
-    }
-
-    setSaved(true);
-  } catch (err) {
-    console.error("Save error:", err);
-
-    if (err instanceof Error) {
-      setError(err.message);
-    } else {
-      setError("Could not save transaction.");
-    }
-  } finally {
-    setSaving(false);
   }
-}
-
-  // --------------------------------
-  // CLEANUP
-  // --------------------------------
 
   useEffect(() => {
     return () => {
@@ -530,229 +538,327 @@ async function saveTransaction() {
   }, [stream]);
 
   return (
-    <main className="min-h-screen bg-slate-100 p-6 text-slate-900">
+    <main className="min-h-screen bg-[#eef4ee] p-4 text-slate-900 sm:p-6">
 
-      <div className="mx-auto max-w-3xl">
+      <div className="mx-auto max-w-4xl">
 
-        <Link
-          href="/"
-          className="mb-6 inline-block font-medium text-blue-600"
-        >
-          ← Back to Dashboard
-        </Link>
+        {/* TOP BAR */}
 
-        <h1 className="text-4xl font-bold">
-          Scan Receipt
-        </h1>
+        <div className="mb-5 flex items-center justify-between">
 
-        <p className="mt-3 text-lg text-slate-500">
-          Take a photo or upload a receipt and let AI extract the transaction.
-        </p>
+          <Link
+            href="/"
+            className="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-green-800 shadow-sm transition hover:bg-green-50"
+          >
+            <ArrowLeft size={17} />
+            Dashboard
+          </Link>
 
-        {/* ERROR */}
+          <div className="flex items-center gap-2 text-green-800">
+
+            <div className="rounded-xl bg-green-800 p-2.5 text-white">
+              <Wallet size={18} />
+            </div>
+
+            <span className="hidden font-bold sm:block">
+              Coinest
+            </span>
+
+          </div>
+
+        </div>
+
+        {/* HEADER */}
+
+        <div className="mb-6">
+
+          <p className="text-sm font-semibold uppercase tracking-wide text-green-700">
+            AI receipt scanner
+          </p>
+
+          <h1 className="mt-2 text-3xl font-bold sm:text-4xl">
+            Scan Receipt
+          </h1>
+
+          <p className="mt-2 max-w-2xl text-sm text-slate-500 sm:text-base">
+            Take a photo or upload a receipt. Coinest will extract the amount,
+            currency, date, merchant, and category automatically.
+          </p>
+
+        </div>
+
+        {/* ALERTS */}
 
         {error && (
-          <div className="mt-6 rounded-xl border border-red-200 bg-red-50 p-4 text-red-700">
+          <div className="mb-5 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
             {error}
           </div>
         )}
 
-        {/* SAVED */}
-
         {saved && (
-          <div className="mt-6 rounded-xl border border-green-200 bg-green-50 p-4 text-green-700">
+          <div className="mb-5 rounded-2xl border border-green-200 bg-green-50 p-4 text-sm text-green-700">
             Transaction saved successfully.
           </div>
         )}
 
-        <div className="mt-8 rounded-3xl bg-white p-6 shadow-sm">
+        {/* SCANNER CARD */}
 
-          {/* INITIAL */}
+        <div className="overflow-hidden rounded-[28px] bg-white shadow-sm">
 
-          {!cameraOpen &&
-            !preview && (
-              <div className="rounded-3xl border-2 border-dashed border-slate-300 p-12 text-center">
+          {/* CARD HEADER */}
 
-                <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-blue-100 text-blue-600">
-                  <Camera size={30} />
-                </div>
+          <div className="border-b border-slate-100 p-5 sm:p-6">
 
-                <h2 className="mt-5 text-xl font-semibold">
-                  Add Receipt
-                </h2>
+            <div className="flex items-center gap-3">
 
-                <p className="mt-2 text-slate-500">
-                  Take a new photo or upload an image.
-                </p>
-
-                <div className="mt-7 flex flex-col justify-center gap-3 sm:flex-row">
-
-                  <button
-                    onClick={
-                      openCamera
-                    }
-                    className="rounded-xl bg-blue-600 px-6 py-3 font-semibold text-white"
-                  >
-                    <Camera
-                      size={18}
-                      className="mr-2 inline"
-                    />
-
-                    Open Camera
-                  </button>
-
-                  <label className="cursor-pointer rounded-xl border border-slate-300 px-6 py-3 font-semibold">
-
-                    <Upload
-                      size={18}
-                      className="mr-2 inline"
-                    />
-
-                    Upload Image
-
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={
-                        handleUpload
-                      }
-                      className="hidden"
-                    />
-                  </label>
-
-                </div>
+              <div className="rounded-xl bg-[#eff5ea] p-3 text-green-800">
+                <Camera size={21} />
               </div>
-            )}
 
-          {/* CAMERA */}
-
-          {cameraOpen &&
-            !preview && (
               <div>
 
-                <div className="overflow-hidden rounded-3xl bg-black">
+                <p className="font-bold">
+                  Receipt Capture
+                </p>
 
-                  <video
-                    ref={
-                      videoRef
-                    }
-                    autoPlay
-                    playsInline
-                    muted
-                    className="aspect-video w-full object-cover"
-                  />
+                <p className="text-sm text-slate-500">
+                  Use your camera or upload an existing image.
+                </p>
 
-                </div>
+              </div>
 
-                <div className="mt-5 flex gap-3">
+            </div>
 
-                  <button
-                    onClick={
-                      takePhoto
-                    }
-                    className="flex-1 rounded-xl bg-blue-600 py-4 font-semibold text-white"
-                  >
+          </div>
+
+          <div className="p-4 sm:p-6">
+
+            {/* INITIAL SCREEN */}
+
+            {!cameraOpen &&
+              !preview && (
+
+                <div className="rounded-[24px] border-2 border-dashed border-slate-200 bg-slate-50 px-5 py-10 text-center sm:px-10 sm:py-14">
+
+                  <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-[#eff5ea] text-green-800">
                     <Camera
-                      size={18}
-                      className="mr-2 inline"
+                      size={30}
                     />
+                  </div>
 
-                    Take Photo
-                  </button>
+                  <h2 className="mt-5 text-xl font-bold">
+                    Add a receipt
+                  </h2>
 
-                  <button
-                    onClick={
-                      stopCamera
-                    }
-                    className="rounded-xl border border-slate-300 px-6"
-                  >
-                    Cancel
-                  </button>
+                  <p className="mx-auto mt-2 max-w-sm text-sm text-slate-500">
+                    Take a clear photo of the receipt or choose one from your device.
+                  </p>
+
+                  <div className="mt-7 grid gap-3 sm:grid-cols-2">
+
+                    <button
+                      type="button"
+                      onClick={
+                        openCamera
+                      }
+                      className="flex items-center justify-center gap-2 rounded-2xl bg-[#214f45] px-5 py-4 font-semibold text-white transition hover:bg-green-900"
+                    >
+                      <Camera
+                        size={18}
+                      />
+                      Open Camera
+                    </button>
+
+                    <label className="flex cursor-pointer items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-5 py-4 font-semibold text-slate-700 transition hover:bg-slate-50">
+
+                      <Upload
+                        size={18}
+                      />
+
+                      Upload Image
+
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={
+                          handleUpload
+                        }
+                        className="hidden"
+                      />
+
+                    </label>
+
+                  </div>
 
                 </div>
-              </div>
-            )}
 
-          {/* IMAGE */}
-
-          {preview && (
-            <div>
-
-              <div className="relative overflow-hidden rounded-3xl bg-slate-100">
-
-                <img
-                  src={preview}
-                  alt="Receipt preview"
-                  className="max-h-[500px] w-full object-contain"
-                />
-
-                <button
-                  onClick={
-                    removeImage
-                  }
-                  className="absolute right-4 top-4 rounded-full bg-black/70 p-2 text-white"
-                >
-                  <X size={20} />
-                </button>
-
-              </div>
-
-              {!detected && (
-                <button
-                  onClick={
-                    analyzeReceipt
-                  }
-                  disabled={
-                    loading
-                  }
-                  className="mt-5 w-full rounded-xl bg-blue-600 p-4 font-semibold text-white disabled:opacity-50"
-                >
-
-                  <Sparkles
-                    size={18}
-                    className="mr-2 inline"
-                  />
-
-                  {loading
-                    ? "Analyzing..."
-                    : "Analyze Receipt"}
-
-                </button>
               )}
 
-            </div>
-          )}
-        </div>
+            {/* CAMERA */}
 
-        {/* DETECTED FORM */}
+            {cameraOpen &&
+              !preview && (
 
-        {detected && (
-          <div className="mt-6 rounded-3xl bg-white p-6 shadow-sm">
+                <div>
 
-            <div className="mb-6 flex items-center justify-between">
+                  <div className="overflow-hidden rounded-[24px] bg-black">
+
+                    <video
+                      ref={
+                        videoRef
+                      }
+                      autoPlay
+                      playsInline
+                      muted
+                      className="aspect-[3/4] w-full object-cover sm:aspect-video"
+                    />
+
+                  </div>
+
+                  <div className="mt-4 grid grid-cols-[1fr_auto] gap-3">
+
+                    <button
+                      type="button"
+                      onClick={
+                        takePhoto
+                      }
+                      className="flex items-center justify-center gap-2 rounded-2xl bg-[#214f45] py-4 font-semibold text-white"
+                    >
+                      <Camera
+                        size={18}
+                      />
+                      Take Photo
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={
+                        stopCamera
+                      }
+                      className="rounded-2xl border border-slate-200 px-5 font-semibold text-slate-600"
+                    >
+                      Cancel
+                    </button>
+
+                  </div>
+
+                </div>
+
+              )}
+
+            {/* IMAGE PREVIEW */}
+
+            {preview && (
 
               <div>
-                <p className="text-sm font-medium text-blue-600">
-                  AI DETECTED
-                </p>
 
-                <h2 className="text-2xl font-bold">
-                  Review Transaction
-                </h2>
+                <div className="relative overflow-hidden rounded-[24px] bg-slate-100">
+
+                  <img
+                    src={preview}
+                    alt="Receipt preview"
+                    className="max-h-[600px] w-full object-contain"
+                  />
+
+                  <button
+                    type="button"
+                    onClick={
+                      removeImage
+                    }
+                    className="absolute right-3 top-3 rounded-full bg-black/70 p-2.5 text-white backdrop-blur"
+                  >
+                    <X
+                      size={18}
+                    />
+                  </button>
+
+                </div>
+
+                {!detected && (
+
+                  <button
+                    type="button"
+                    onClick={
+                      analyzeReceipt
+                    }
+                    disabled={
+                      loading
+                    }
+                    className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl bg-[#214f45] p-4 font-semibold text-white transition hover:bg-green-900 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+
+                    {loading ? (
+                      <RefreshCw
+                        size={18}
+                        className="animate-spin"
+                      />
+                    ) : (
+                      <Sparkles
+                        size={18}
+                      />
+                    )}
+
+                    {loading
+                      ? "Analyzing Receipt..."
+                      : "Analyze Receipt"}
+
+                  </button>
+
+                )}
+
               </div>
 
-              <div className="rounded-full bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-600">
-                {detected.confidence}% confidence
+            )}
+
+          </div>
+
+        </div>
+
+        {/* DETECTED TRANSACTION */}
+
+        {detected && (
+
+          <div className="mt-5 overflow-hidden rounded-[28px] bg-white shadow-sm">
+
+            {/* DETECTED HEADER */}
+
+            <div className="border-b border-slate-100 p-5 sm:p-6">
+
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+
+                <div>
+
+                  <p className="text-sm font-semibold uppercase tracking-wide text-green-700">
+                    AI detected
+                  </p>
+
+                  <h2 className="mt-1 text-2xl font-bold">
+                    Review Transaction
+                  </h2>
+
+                  <p className="mt-1 text-sm text-slate-500">
+                    Check the detected details before saving.
+                  </p>
+
+                </div>
+
+                <div className="w-fit rounded-full bg-[#eff5ea] px-4 py-2 text-sm font-semibold text-green-800">
+                  {detected.confidence}% confidence
+                </div>
+
               </div>
 
             </div>
 
-            <div className="space-y-5">
+            {/* FORM */}
+
+            <div className="space-y-5 p-5 sm:p-6">
 
               {/* DESCRIPTION */}
 
               <div>
-                <label className="mb-2 block font-medium">
+
+                <label className="mb-2 block text-sm font-semibold text-slate-700">
                   Description
                 </label>
 
@@ -764,65 +870,99 @@ async function saveTransaction() {
                     setDetected({
                       ...detected,
                       description:
-                        e.target
-                          .value,
+                        e.target.value,
                     })
                   }
-                  className="w-full rounded-xl border border-slate-300 p-3"
+                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3.5 outline-none transition focus:border-green-700 focus:bg-white focus:ring-2 focus:ring-green-100"
                 />
+
               </div>
 
-              {/* AMOUNT */}
+              {/* AMOUNT + CURRENCY */}
 
-              <div>
-                <label className="mb-2 block font-medium">
-                Amount ({detected.currency})
-                </label>
+              <div className="grid gap-4 sm:grid-cols-[1.4fr_1fr]">
 
-                <input
-                    type="number"
-                    step={detected.currency === "IDR" ? "1" : "0.01"}
-                    value={detected.amount}
-                    onChange={(e) =>
+                <div>
+
+                  <label className="mb-2 block text-sm font-semibold text-slate-700">
+                    Amount ({detected.currency})
+                  </label>
+
+                  <div className="relative">
+
+                    <div className="absolute inset-y-0 left-0 flex items-center pl-4 font-semibold text-slate-500">
+                      {detected.currency ===
+                      "AUD"
+                        ? "A$"
+                        : "Rp"}
+                    </div>
+
+                    <input
+                      type="number"
+                      step={
+                        detected.currency ===
+                        "IDR"
+                          ? "1"
+                          : "0.01"
+                      }
+                      value={
+                        detected.amount
+                      }
+                      onChange={(e) =>
                         setDetected({
-                        ...detected,
-                        amount: Number(e.target.value),
+                          ...detected,
+                          amount:
+                            Number(
+                              e.target.value
+                            ),
                         })
-                    }
-                    className="w-full rounded-xl border border-slate-300 p-3"
+                      }
+                      className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3.5 pl-14 pr-4 text-lg font-semibold outline-none transition focus:border-green-700 focus:bg-white focus:ring-2 focus:ring-green-100"
                     />
-              </div>
 
-              {/* Currency */}
-              <div>
-                <label className="mb-2 block font-medium">
+                  </div>
+
+                </div>
+
+                <div>
+
+                  <label className="mb-2 block text-sm font-semibold text-slate-700">
                     Currency
-                </label>
+                  </label>
 
-                <select
-                    value={detected.currency}
-                    onChange={(e) =>
-                    setDetected({
-                        ...detected,
-                        currency: e.target.value as "AUD" | "IDR",
-                    })
+                  <select
+                    value={
+                      detected.currency
                     }
-                    className="w-full rounded-xl border border-slate-300 p-3"
-                >
+                    onChange={(e) =>
+                      setDetected({
+                        ...detected,
+                        currency:
+                          e.target.value as
+                            | "AUD"
+                            | "IDR",
+                      })
+                    }
+                    className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3.5 outline-none transition focus:border-green-700 focus:bg-white focus:ring-2 focus:ring-green-100"
+                  >
                     <option value="AUD">
-                    AUD — Australian Dollar
+                      AUD — Australian Dollar
                     </option>
 
                     <option value="IDR">
-                    IDR — Indonesian Rupiah
+                      IDR — Indonesian Rupiah
                     </option>
-                </select>
+                  </select>
+
                 </div>
+
+              </div>
 
               {/* DATE */}
 
               <div>
-                <label className="mb-2 block font-medium">
+
+                <label className="mb-2 block text-sm font-semibold text-slate-700">
                   Date
                 </label>
 
@@ -835,96 +975,117 @@ async function saveTransaction() {
                     setDetected({
                       ...detected,
                       date:
-                        e.target
-                          .value,
+                        e.target.value,
                     })
                   }
-                  className="w-full rounded-xl border border-slate-300 p-3"
+                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3.5 outline-none transition focus:border-green-700 focus:bg-white focus:ring-2 focus:ring-green-100"
                 />
+
               </div>
 
-              {/* TYPE */}
+              {/* TYPE + CATEGORY */}
 
-              <div>
-                <label className="mb-2 block font-medium">
-                  Type
-                </label>
+              <div className="grid gap-4 sm:grid-cols-2">
 
-                <select
-                  value={
-                    detected.type
-                  }
-                  onChange={(e) =>
-                    setDetected({
-                      ...detected,
-                      type:
-                        e.target
-                          .value as
-                          | "income"
-                          | "expense",
-                    })
-                  }
-                  className="w-full rounded-xl border border-slate-300 p-3"
-                >
+                <div>
 
-                  <option value="expense">
-                    Expense
-                  </option>
+                  <label className="mb-2 block text-sm font-semibold text-slate-700">
+                    Type
+                  </label>
 
-                  <option value="income">
-                    Income
-                  </option>
+                  <select
+                    value={
+                      detected.type
+                    }
+                    onChange={(e) =>
+                      setDetected({
+                        ...detected,
+                        type:
+                          e.target.value as
+                            | "income"
+                            | "expense",
+                      })
+                    }
+                    className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3.5 outline-none transition focus:border-green-700 focus:bg-white focus:ring-2 focus:ring-green-100"
+                  >
+                    <option value="expense">
+                      Expense
+                    </option>
 
-                </select>
+                    <option value="income">
+                      Income
+                    </option>
+                  </select>
+
+                </div>
+
+                <div>
+
+                  <label className="mb-2 block text-sm font-semibold text-slate-700">
+                    Category
+                  </label>
+
+                  <select
+                    value={
+                      detected.category
+                    }
+                    onChange={(e) =>
+                      setDetected({
+                        ...detected,
+                        category:
+                          e.target.value,
+                      })
+                    }
+                    className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3.5 outline-none transition focus:border-green-700 focus:bg-white focus:ring-2 focus:ring-green-100"
+                  >
+
+                    {categories.map(
+                      (
+                        category
+                      ) => (
+                        <option
+                          key={
+                            category
+                          }
+                          value={
+                            category
+                          }
+                        >
+                          {category}
+                        </option>
+                      )
+                    )}
+
+                  </select>
+
+                </div>
+
               </div>
 
-              {/* CATEGORY */}
+              {/* CURRENCY EXPLANATION */}
 
-              <div>
-                <label className="mb-2 block font-medium">
-                  Category
-                </label>
+              <div className="rounded-2xl bg-[#eff5ea] p-4">
 
-                <select
-                  value={
-                    detected.category
-                  }
-                  onChange={(e) =>
-                    setDetected({
-                      ...detected,
-                      category:
-                        e.target
-                          .value,
-                    })
-                  }
-                  className="w-full rounded-xl border border-slate-300 p-3"
-                >
+                <p className="text-sm font-semibold text-green-900">
+                  {detected.currency ===
+                  "IDR"
+                    ? "Indonesian Rupiah detected"
+                    : "Australian Dollar detected"}
+                </p>
 
-                  {categories.map(
-                    (
-                      category
-                    ) => (
-                      <option
-                        key={
-                          category
-                        }
-                        value={
-                          category
-                        }
-                      >
-                        {
-                          category
-                        }
-                      </option>
-                    )
-                  )}
+                <p className="mt-1 text-sm text-slate-600">
+                  {detected.currency ===
+                  "IDR"
+                    ? "The original IDR amount will be preserved and converted to AUD using the exchange rate when you save."
+                    : "This amount will be stored directly as AUD."}
+                </p>
 
-                </select>
               </div>
 
               {/* SAVE */}
 
               <button
+                type="button"
                 onClick={
                   saveTransaction
                 }
@@ -932,32 +1093,66 @@ async function saveTransaction() {
                   saving ||
                   saved
                 }
-                className="w-full rounded-xl bg-green-600 p-4 font-semibold text-white disabled:opacity-50"
+                className="flex w-full items-center justify-center gap-2 rounded-2xl bg-[#214f45] p-4 font-semibold text-white transition hover:bg-green-900 disabled:cursor-not-allowed disabled:opacity-50"
               >
 
                 <Save
                   size={18}
-                  className="mr-2 inline"
                 />
 
                 {saved
-                  ? "Saved"
+                  ? "Transaction Saved"
                   : saving
-                    ? "Saving..."
-                    : "Save Transaction"}
+                  ? "Saving..."
+                  : "Save Transaction"}
 
               </button>
 
+              {saved && (
+
+                <Link
+                  href="/"
+                  className="block w-full rounded-2xl border border-green-200 bg-green-50 p-4 text-center font-semibold text-green-800"
+                >
+                  View Dashboard
+                </Link>
+
+              )}
+
             </div>
+
           </div>
+
+        )}
+
+        {/* TIP */}
+
+        {!detected && (
+
+          <div className="mt-5 rounded-2xl bg-[#eff5ea] p-4 text-sm text-slate-600">
+
+            <p className="font-semibold text-green-900">
+              For best results
+            </p>
+
+            <p className="mt-1">
+              Keep the receipt flat, make sure the total and currency are visible,
+              and avoid shadows or blurry photos.
+            </p>
+
+          </div>
+
         )}
 
         <canvas
-          ref={canvasRef}
+          ref={
+            canvasRef
+          }
           className="hidden"
         />
 
       </div>
+
     </main>
   );
 }
