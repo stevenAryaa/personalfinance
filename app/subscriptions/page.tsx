@@ -1,6 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import {
+  useEffect,
+  useState,
+} from "react";
+
 import Link from "next/link";
 
 import {
@@ -13,66 +17,199 @@ import {
   Repeat2,
   Trash2,
   Wallet,
+  RefreshCw,
 } from "lucide-react";
 
 import { supabase } from "@/lib/supabase";
 
+type Currency =
+  | "AUD"
+  | "IDR";
+
 type Subscription = {
   id: string;
+
   name: string;
-  amount: number | string;
-  category: string | null;
-  billing_cycle: "weekly" | "monthly" | "yearly";
-  next_payment_date: string;
-  status: "active" | "cancelled" | "paused";
-  reminder_enabled: boolean;
-  reminder_days_before: number;
-  reminder_time: string | null;
+
+  // Normalized AUD
+  amount:
+    | number
+    | string;
+
+  // Original value
+  original_amount?:
+    | number
+    | string
+    | null;
+
+  currency?:
+    | Currency
+    | null;
+
+  category:
+    | string
+    | null;
+
+  billing_cycle:
+    | "weekly"
+    | "monthly"
+    | "yearly";
+
+  next_payment_date:
+    string;
+
+  status:
+    | "active"
+    | "cancelled"
+    | "paused";
+
+  reminder_enabled:
+    boolean;
+
+  reminder_days_before:
+    number;
+
+  reminder_time:
+    | string
+    | null;
 };
 
 export default function SubscriptionsPage() {
-  const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
+  const [
+    subscriptions,
+    setSubscriptions,
+  ] =
+    useState<
+      Subscription[]
+    >([]);
 
-  const [name, setName] = useState("");
-  const [amount, setAmount] = useState("");
-  const [category, setCategory] = useState("Entertainment");
+  const [name, setName] =
+    useState("");
 
-  const [billingCycle, setBillingCycle] = useState<
-    "weekly" | "monthly" | "yearly"
-  >("monthly");
+  const [
+    amount,
+    setAmount,
+  ] =
+    useState("");
 
-  const [nextPaymentDate, setNextPaymentDate] = useState("");
-  const [reminderDays, setReminderDays] = useState("7");
-  const [reminderTime, setReminderTime] = useState("09:00");
+  const [
+    currency,
+    setCurrency,
+  ] =
+    useState<Currency>(
+      "AUD"
+    );
 
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  const [message, setMessage] = useState("");
+  const [
+    category,
+    setCategory,
+  ] =
+    useState(
+      "Entertainment"
+    );
+
+  const [
+    billingCycle,
+    setBillingCycle,
+  ] =
+    useState<
+      | "weekly"
+      | "monthly"
+      | "yearly"
+    >("monthly");
+
+  const [
+    nextPaymentDate,
+    setNextPaymentDate,
+  ] =
+    useState("");
+
+  const [
+    reminderDays,
+    setReminderDays,
+  ] =
+    useState("7");
+
+  const [
+    reminderTime,
+    setReminderTime,
+  ] =
+    useState("09:00");
+
+  const [
+    loading,
+    setLoading,
+  ] =
+    useState(true);
+
+  const [
+    saving,
+    setSaving,
+  ] =
+    useState(false);
+
+  const [
+    error,
+    setError,
+  ] =
+    useState("");
+
+  const [
+    message,
+    setMessage,
+  ] =
+    useState("");
+
+  /* =========================================================
+     LOAD
+  ========================================================= */
 
   async function loadSubscriptions() {
     setLoading(true);
 
-    const { data, error } = await supabase
-      .from("subscriptions")
-      .select("*")
-      .order("next_payment_date", {
-        ascending: true,
-      });
+    const {
+      data,
+      error,
+    } =
+      await supabase
+        .from(
+          "subscriptions"
+        )
+        .select("*")
+        .order(
+          "next_payment_date",
+          {
+            ascending:
+              true,
+          }
+        );
 
     if (error) {
-      setError(error.message);
-      setLoading(false);
+      setError(
+        error.message
+      );
+
+      setLoading(
+        false
+      );
+
       return;
     }
 
-    setSubscriptions(data ?? []);
+    setSubscriptions(
+      data ?? []
+    );
+
     setLoading(false);
   }
 
   useEffect(() => {
     loadSubscriptions();
   }, []);
+
+  /* =========================================================
+     ADD
+  ========================================================= */
 
   async function addSubscription(
     e: React.FormEvent<HTMLFormElement>
@@ -83,160 +220,408 @@ export default function SubscriptionsPage() {
     setError("");
     setMessage("");
 
-    const numericAmount = Number(amount);
+    try {
+      const numericAmount =
+        Number(amount);
 
-    if (
-      !Number.isFinite(numericAmount) ||
-      numericAmount <= 0
-    ) {
-      setError("Please enter a valid subscription amount.");
+      if (
+        !Number.isFinite(
+          numericAmount
+        ) ||
+        numericAmount <=
+          0
+      ) {
+        setError(
+          "Please enter a valid subscription amount."
+        );
+
+        return;
+      }
+
+      let normalizedAUDAmount =
+        numericAmount;
+
+      /*
+        Subscription prices are normalized to AUD
+        so the dashboard monthly/yearly totals remain accurate.
+      */
+
+      if (
+        currency ===
+        "IDR"
+      ) {
+        const rateResponse =
+          await fetch(
+            "/api/exchange-rate"
+          );
+
+        if (
+          !rateResponse.ok
+        ) {
+          throw new Error(
+            "Could not get the AUD/IDR exchange rate."
+          );
+        }
+
+        const rateData =
+          await rateResponse.json();
+
+        const audToIdr =
+          Number(
+            rateData.rate
+          );
+
+        if (
+          !Number.isFinite(
+            audToIdr
+          ) ||
+          audToIdr <=
+            0
+        ) {
+          throw new Error(
+            "Invalid exchange rate returned."
+          );
+        }
+
+        normalizedAUDAmount =
+          numericAmount /
+          audToIdr;
+      }
+
+      const { error } =
+        await supabase
+          .from(
+            "subscriptions"
+          )
+          .insert([
+            {
+              name,
+
+              // Normalized AUD
+              amount:
+                normalizedAUDAmount,
+
+              // Original entered amount
+              original_amount:
+                numericAmount,
+
+              currency,
+
+              category,
+
+              billing_cycle:
+                billingCycle,
+
+              next_payment_date:
+                nextPaymentDate,
+
+              status:
+                "active",
+
+              reminder_enabled:
+                true,
+
+              reminder_days_before:
+                Number(
+                  reminderDays
+                ),
+
+              reminder_time:
+                reminderTime,
+
+              source:
+                "manual",
+            },
+          ]);
+
+      if (error) {
+        throw error;
+      }
+
+      setMessage(
+        "Subscription added successfully."
+      );
+
+      setName("");
+      setAmount("");
+      setCurrency(
+        "AUD"
+      );
+
+      setCategory(
+        "Entertainment"
+      );
+
+      setBillingCycle(
+        "monthly"
+      );
+
+      setNextPaymentDate(
+        ""
+      );
+
+      setReminderDays(
+        "7"
+      );
+
+      setReminderTime(
+        "09:00"
+      );
+
+      await loadSubscriptions();
+    } catch (err) {
+      console.error(err);
+
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Could not add subscription."
+      );
+    } finally {
       setSaving(false);
-      return;
     }
-
-    const { error } = await supabase
-      .from("subscriptions")
-      .insert([
-        {
-          name,
-          amount: numericAmount,
-          category,
-          billing_cycle: billingCycle,
-          next_payment_date: nextPaymentDate,
-          status: "active",
-          reminder_enabled: true,
-          reminder_days_before: Number(reminderDays),
-          reminder_time: reminderTime,
-          source: "manual",
-        },
-      ]);
-
-    setSaving(false);
-
-    if (error) {
-      setError(error.message);
-      return;
-    }
-
-    setMessage("Subscription added successfully.");
-
-    setName("");
-    setAmount("");
-    setCategory("Entertainment");
-    setBillingCycle("monthly");
-    setNextPaymentDate("");
-    setReminderDays("7");
-    setReminderTime("09:00");
-
-    await loadSubscriptions();
   }
+
+  /* =========================================================
+     STATUS
+  ========================================================= */
 
   async function changeStatus(
     id: string,
-    status: "active" | "cancelled" | "paused"
+    status:
+      | "active"
+      | "cancelled"
+      | "paused"
   ) {
     setError("");
     setMessage("");
 
-    const { error } = await supabase
-      .from("subscriptions")
-      .update({ status })
-      .eq("id", id);
+    const { error } =
+      await supabase
+        .from(
+          "subscriptions"
+        )
+        .update({
+          status,
+        })
+        .eq(
+          "id",
+          id
+        );
 
     if (error) {
-      setError(error.message);
+      setError(
+        error.message
+      );
+
       return;
     }
 
     await loadSubscriptions();
   }
 
-  async function deleteSubscription(id: string) {
-    const confirmed = window.confirm(
-      "Delete this subscription from your tracker?"
-    );
+  /* =========================================================
+     DELETE
+  ========================================================= */
 
-    if (!confirmed) return;
+  async function deleteSubscription(
+    id: string
+  ) {
+    const confirmed =
+      window.confirm(
+        "Delete this subscription from your tracker?"
+      );
+
+    if (!confirmed) {
+      return;
+    }
 
     setError("");
     setMessage("");
 
-    const { error } = await supabase
-      .from("subscriptions")
-      .delete()
-      .eq("id", id);
+    const { error } =
+      await supabase
+        .from(
+          "subscriptions"
+        )
+        .delete()
+        .eq(
+          "id",
+          id
+        );
 
     if (error) {
-      setError(error.message);
+      setError(
+        error.message
+      );
+
       return;
     }
 
     await loadSubscriptions();
   }
 
-  function formatCurrency(value: number) {
-    return new Intl.NumberFormat("en-AU", {
-      style: "currency",
-      currency: "AUD",
-      maximumFractionDigits: 2,
-    }).format(value);
+  /* =========================================================
+     FORMAT
+  ========================================================= */
+
+  function formatAUD(
+    value: number
+  ) {
+    return new Intl.NumberFormat(
+      "en-AU",
+      {
+        style:
+          "currency",
+        currency:
+          "AUD",
+        maximumFractionDigits:
+          2,
+      }
+    ).format(value);
   }
 
-  function yearlyCost(subscription: Subscription) {
-    const amount = Number(subscription.amount);
+  function formatIDR(
+    value: number
+  ) {
+    return new Intl.NumberFormat(
+      "id-ID",
+      {
+        style:
+          "currency",
+        currency:
+          "IDR",
+        maximumFractionDigits:
+          0,
+      }
+    ).format(value);
+  }
 
-    if (subscription.billing_cycle === "weekly") {
+  function yearlyCost(
+    subscription:
+      Subscription
+  ) {
+    const amount =
+      Number(
+        subscription.amount
+      );
+
+    if (
+      subscription.billing_cycle ===
+      "weekly"
+    ) {
       return amount * 52;
     }
 
-    if (subscription.billing_cycle === "monthly") {
+    if (
+      subscription.billing_cycle ===
+      "monthly"
+    ) {
       return amount * 12;
     }
 
     return amount;
   }
 
-  function formatRenewalDate(dateString: string) {
-    if (!dateString) return "No renewal date";
+  function formatRenewalDate(
+    dateString:
+      string
+  ) {
+    if (!dateString) {
+      return "No renewal date";
+    }
 
-    const date = new Date(`${dateString}T00:00:00`);
+    const date =
+      new Date(
+        `${dateString}T00:00:00`
+      );
 
-    return date.toLocaleDateString("en-AU", {
-      day: "numeric",
-      month: "short",
-      year: "numeric",
-    });
+    return date.toLocaleDateString(
+      "en-AU",
+      {
+        day:
+          "numeric",
+        month:
+          "short",
+        year:
+          "numeric",
+      }
+    );
   }
 
-  const activeSubscriptions = subscriptions.filter(
-    (subscription) => subscription.status === "active"
-  );
+  /* =========================================================
+     TOTALS
+  ========================================================= */
 
-  const estimatedMonthlyCost = activeSubscriptions.reduce(
-    (total, subscription) => {
-      const amount = Number(subscription.amount);
+  const activeSubscriptions =
+    subscriptions.filter(
+      (
+        subscription
+      ) =>
+        subscription.status ===
+        "active"
+    );
 
-      if (subscription.billing_cycle === "weekly") {
-        return total + (amount * 52) / 12;
-      }
+  const estimatedMonthlyCost =
+    activeSubscriptions.reduce(
+      (
+        total,
+        subscription
+      ) => {
+        const amount =
+          Number(
+            subscription.amount
+          );
 
-      if (subscription.billing_cycle === "yearly") {
-        return total + amount / 12;
-      }
+        if (
+          subscription.billing_cycle ===
+          "weekly"
+        ) {
+          return (
+            total +
+            (amount * 52) /
+              12
+          );
+        }
 
-      return total + amount;
-    },
-    0
-  );
+        if (
+          subscription.billing_cycle ===
+          "yearly"
+        ) {
+          return (
+            total +
+            amount / 12
+          );
+        }
 
-  const estimatedYearlyCost = activeSubscriptions.reduce(
-    (total, subscription) =>
-      total + yearlyCost(subscription),
-    0
-  );
+        return (
+          total +
+          amount
+        );
+      },
+      0
+    );
+
+  const estimatedYearlyCost =
+    activeSubscriptions.reduce(
+      (
+        total,
+        subscription
+      ) =>
+        total +
+        yearlyCost(
+          subscription
+        ),
+      0
+    );
+
+  /* =========================================================
+     UI
+  ========================================================= */
 
   return (
     <main className="min-h-screen bg-[#eef4ee] p-4 text-slate-900 sm:p-6">
+
       <div className="mx-auto max-w-6xl">
 
         {/* TOP BAR */}
@@ -247,14 +632,18 @@ export default function SubscriptionsPage() {
             href="/"
             className="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-green-800 shadow-sm transition hover:bg-green-50"
           >
-            <ArrowLeft size={17} />
+            <ArrowLeft
+              size={17}
+            />
             Dashboard
           </Link>
 
           <div className="flex items-center gap-2 text-green-800">
 
             <div className="rounded-xl bg-green-800 p-2.5 text-white">
-              <Wallet size={18} />
+              <Wallet
+                size={18}
+              />
             </div>
 
             <span className="hidden font-bold sm:block">
@@ -262,6 +651,7 @@ export default function SubscriptionsPage() {
             </span>
 
           </div>
+
         </div>
 
         {/* HEADER */}
@@ -277,7 +667,7 @@ export default function SubscriptionsPage() {
           </h1>
 
           <p className="mt-2 max-w-2xl text-sm text-slate-500 sm:text-base">
-            Track recurring payments, upcoming renewals, and reminder dates.
+            Track recurring payments in AUD or IDR and get reminded before they renew.
           </p>
 
         </div>
@@ -285,15 +675,19 @@ export default function SubscriptionsPage() {
         {/* ALERTS */}
 
         {error && (
+
           <div className="mb-5 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
             {error}
           </div>
+
         )}
 
         {message && (
+
           <div className="mb-5 rounded-2xl border border-green-200 bg-green-50 p-4 text-sm text-green-700">
             {message}
           </div>
+
         )}
 
         {/* SUMMARY */}
@@ -307,7 +701,9 @@ export default function SubscriptionsPage() {
             </p>
 
             <p className="mt-2 text-2xl font-bold sm:text-3xl">
-              {activeSubscriptions.length}
+              {
+                activeSubscriptions.length
+              }
             </p>
 
             <p className="mt-2 text-xs text-green-100">
@@ -323,11 +719,13 @@ export default function SubscriptionsPage() {
             </p>
 
             <p className="mt-2 break-words text-xl font-bold sm:text-3xl">
-              {formatCurrency(estimatedMonthlyCost)}
+              {formatAUD(
+                estimatedMonthlyCost
+              )}
             </p>
 
             <p className="mt-2 text-xs text-slate-500">
-              Estimated recurring spend
+              Normalized to AUD
             </p>
 
           </div>
@@ -339,7 +737,9 @@ export default function SubscriptionsPage() {
             </p>
 
             <p className="mt-2 break-words text-xl font-bold sm:text-3xl">
-              {formatCurrency(estimatedYearlyCost)}
+              {formatAUD(
+                estimatedYearlyCost
+              )}
             </p>
 
             <p className="mt-2 text-xs text-slate-500">
@@ -350,16 +750,16 @@ export default function SubscriptionsPage() {
 
         </div>
 
-        {/* MAIN AREA */}
+        {/* MAIN */}
 
         <div className="mt-5 grid gap-5 lg:grid-cols-[0.9fr_1.5fr]">
 
-          {/* =================================================
-              ADD SUBSCRIPTION
-          ================================================= */}
+          {/* ADD FORM */}
 
           <form
-            onSubmit={addSubscription}
+            onSubmit={
+              addSubscription
+            }
             className="rounded-[28px] bg-white shadow-sm"
           >
 
@@ -368,7 +768,9 @@ export default function SubscriptionsPage() {
               <div className="flex items-center gap-3">
 
                 <div className="rounded-xl bg-[#eff5ea] p-3 text-green-800">
-                  <Plus size={20} />
+                  <Plus
+                    size={20}
+                  />
                 </div>
 
                 <div>
@@ -400,12 +802,62 @@ export default function SubscriptionsPage() {
                 <input
                   value={name}
                   onChange={(e) =>
-                    setName(e.target.value)
+                    setName(
+                      e.target.value
+                    )
                   }
-                  placeholder="e.g. Netflix"
+                  placeholder="e.g. Netflix or YouTube Premium"
                   required
                   className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3.5 outline-none transition focus:border-green-700 focus:bg-white focus:ring-2 focus:ring-green-100"
                 />
+
+              </div>
+
+              {/* CURRENCY */}
+
+              <div>
+
+                <label className="mb-2 block text-sm font-semibold text-slate-700">
+                  Currency
+                </label>
+
+                <div className="grid grid-cols-2 gap-3">
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setCurrency(
+                        "AUD"
+                      )
+                    }
+                    className={`rounded-2xl border p-3.5 font-semibold transition ${
+                      currency ===
+                      "AUD"
+                        ? "border-green-700 bg-[#eff5ea] text-green-800"
+                        : "border-slate-200 text-slate-500 hover:bg-slate-50"
+                    }`}
+                  >
+                    🇦🇺 AUD
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setCurrency(
+                        "IDR"
+                      )
+                    }
+                    className={`rounded-2xl border p-3.5 font-semibold transition ${
+                      currency ===
+                      "IDR"
+                        ? "border-green-700 bg-[#eff5ea] text-green-800"
+                        : "border-slate-200 text-slate-500 hover:bg-slate-50"
+                    }`}
+                  >
+                    🇮🇩 IDR
+                  </button>
+
+                </div>
 
               </div>
 
@@ -414,27 +866,68 @@ export default function SubscriptionsPage() {
               <div>
 
                 <label className="mb-2 block text-sm font-semibold text-slate-700">
-                  Amount
+                  Amount ({currency})
                 </label>
 
                 <div className="relative">
 
                   <div className="absolute inset-y-0 left-0 flex items-center pl-4 font-semibold text-slate-500">
-                    A$
+                    {currency ===
+                    "AUD"
+                      ? "A$"
+                      : "Rp"}
                   </div>
 
                   <input
                     type="number"
-                    step="0.01"
-                    min="0.01"
+                    step={
+                      currency ===
+                      "IDR"
+                        ? "1"
+                        : "0.01"
+                    }
+                    min={
+                      currency ===
+                      "IDR"
+                        ? "1"
+                        : "0.01"
+                    }
                     value={amount}
                     onChange={(e) =>
-                      setAmount(e.target.value)
+                      setAmount(
+                        e.target.value
+                      )
                     }
-                    placeholder="18.99"
+                    placeholder={
+                      currency ===
+                      "AUD"
+                        ? "18.99"
+                        : "150000"
+                    }
                     required
-                    className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3.5 pl-12 pr-4 text-lg font-semibold outline-none transition focus:border-green-700 focus:bg-white focus:ring-2 focus:ring-green-100"
+                    className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3.5 pl-14 pr-4 text-lg font-semibold outline-none transition focus:border-green-700 focus:bg-white focus:ring-2 focus:ring-green-100"
                   />
+
+                </div>
+
+                <div className="mt-2 flex items-start gap-2 text-xs text-slate-400">
+
+                  {currency ===
+                    "IDR" && (
+
+                    <RefreshCw
+                      size={13}
+                      className="mt-0.5 shrink-0"
+                    />
+
+                  )}
+
+                  <p>
+                    {currency ===
+                    "AUD"
+                      ? "The subscription will be stored directly in AUD."
+                      : "The IDR value will be preserved and converted to AUD for dashboard totals."}
+                  </p>
 
                 </div>
 
@@ -449,9 +942,13 @@ export default function SubscriptionsPage() {
                 </label>
 
                 <select
-                  value={category}
+                  value={
+                    category
+                  }
                   onChange={(e) =>
-                    setCategory(e.target.value)
+                    setCategory(
+                      e.target.value
+                    )
                   }
                   className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3.5 outline-none transition focus:border-green-700 focus:bg-white focus:ring-2 focus:ring-green-100"
                 >
@@ -504,35 +1001,44 @@ export default function SubscriptionsPage() {
                     "weekly",
                     "monthly",
                     "yearly",
-                  ].map((cycle) => (
+                  ].map(
+                    (
+                      cycle
+                    ) => (
 
-                    <button
-                      key={cycle}
-                      type="button"
-                      onClick={() =>
-                        setBillingCycle(
-                          cycle as
-                            | "weekly"
-                            | "monthly"
-                            | "yearly"
-                        )
-                      }
-                      className={`rounded-xl border px-2 py-3 text-sm font-semibold capitalize transition ${
-                        billingCycle === cycle
-                          ? "border-green-700 bg-[#eff5ea] text-green-800"
-                          : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"
-                      }`}
-                    >
-                      {cycle}
-                    </button>
+                      <button
+                        key={
+                          cycle
+                        }
+                        type="button"
+                        onClick={() =>
+                          setBillingCycle(
+                            cycle as
+                              | "weekly"
+                              | "monthly"
+                              | "yearly"
+                          )
+                        }
+                        className={`rounded-xl border px-2 py-3 text-sm font-semibold capitalize transition ${
+                          billingCycle ===
+                          cycle
+                            ? "border-green-700 bg-[#eff5ea] text-green-800"
+                            : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"
+                        }`}
+                      >
+                        {
+                          cycle
+                        }
+                      </button>
 
-                  ))}
+                    )
+                  )}
 
                 </div>
 
               </div>
 
-              {/* NEXT DATE */}
+              {/* DATE */}
 
               <div>
 
@@ -542,7 +1048,9 @@ export default function SubscriptionsPage() {
 
                 <input
                   type="date"
-                  value={nextPaymentDate}
+                  value={
+                    nextPaymentDate
+                  }
                   onChange={(e) =>
                     setNextPaymentDate(
                       e.target.value
@@ -563,7 +1071,9 @@ export default function SubscriptionsPage() {
                 </label>
 
                 <select
-                  value={reminderDays}
+                  value={
+                    reminderDays
+                  }
                   onChange={(e) =>
                     setReminderDays(
                       e.target.value
@@ -604,7 +1114,9 @@ export default function SubscriptionsPage() {
 
                 <input
                   type="time"
-                  value={reminderTime}
+                  value={
+                    reminderTime
+                  }
                   onChange={(e) =>
                     setReminderTime(
                       e.target.value
@@ -619,14 +1131,21 @@ export default function SubscriptionsPage() {
 
               <button
                 type="submit"
-                disabled={saving}
+                disabled={
+                  saving
+                }
                 className="flex w-full items-center justify-center gap-2 rounded-2xl bg-[#214f45] p-4 font-semibold text-white transition hover:bg-green-900 disabled:cursor-not-allowed disabled:opacity-50"
               >
 
-                <Plus size={18} />
+                <Plus
+                  size={18}
+                />
 
                 {saving
-                  ? "Saving..."
+                  ? currency ===
+                    "IDR"
+                    ? "Converting & Saving..."
+                    : "Saving..."
                   : "Add Subscription"}
 
               </button>
@@ -635,9 +1154,7 @@ export default function SubscriptionsPage() {
 
           </form>
 
-          {/* =================================================
-              SUBSCRIPTIONS LIST
-          ================================================= */}
+          {/* LIST */}
 
           <section className="min-w-0 rounded-[28px] bg-white p-5 shadow-sm sm:p-6">
 
@@ -656,7 +1173,9 @@ export default function SubscriptionsPage() {
               </div>
 
               <div className="rounded-xl bg-[#eff5ea] p-3 text-green-800">
-                <Repeat2 size={21} />
+                <Repeat2
+                  size={21}
+                />
               </div>
 
             </div>
@@ -667,7 +1186,8 @@ export default function SubscriptionsPage() {
                 Loading subscriptions...
               </div>
 
-            ) : subscriptions.length === 0 ? (
+            ) : subscriptions.length ===
+              0 ? (
 
               <div className="rounded-2xl border border-dashed border-slate-300 p-8 text-center">
 
@@ -688,23 +1208,27 @@ export default function SubscriptionsPage() {
               <div className="space-y-4">
 
                 {subscriptions.map(
-                  (subscription) => (
+                  (
+                    subscription
+                  ) => (
 
                     <div
-                      key={subscription.id}
+                      key={
+                        subscription.id
+                      }
                       className="rounded-2xl border border-slate-200 bg-white p-4 transition hover:border-green-200 sm:p-5"
                     >
 
                       <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-
-                        {/* DETAILS */}
 
                         <div className="min-w-0">
 
                           <div className="flex flex-wrap items-center gap-2">
 
                             <h3 className="truncate text-lg font-bold">
-                              {subscription.name}
+                              {
+                                subscription.name
+                              }
                             </h3>
 
                             <span
@@ -718,27 +1242,67 @@ export default function SubscriptionsPage() {
                                   : "bg-slate-100 text-slate-500"
                               }`}
                             >
-                              {subscription.status}
+                              {
+                                subscription.status
+                              }
                             </span>
 
                           </div>
 
+                          {/* NORMALIZED AUD */}
+
                           <p className="mt-2 text-2xl font-bold">
 
-                            {formatCurrency(
+                            {formatAUD(
                               Number(
                                 subscription.amount
                               )
                             )}
 
                             <span className="ml-1 text-sm font-normal capitalize text-slate-500">
-                              / {subscription.billing_cycle}
+                              /{" "}
+                              {
+                                subscription.billing_cycle
+                              }
                             </span>
 
                           </p>
 
-                          <p className="mt-1 text-sm text-slate-500">
-                            {subscription.category || "Other"}
+                          {/* ORIGINAL CURRENCY */}
+
+                          {subscription.currency ===
+                            "IDR" &&
+                            subscription.original_amount !=
+                              null && (
+
+                            <p className="mt-1 text-sm font-medium text-green-700">
+
+                              Original:{" "}
+
+                              {formatIDR(
+                                Number(
+                                  subscription.original_amount
+                                )
+                              )}
+
+                            </p>
+
+                          )}
+
+                          {subscription.currency ===
+                            "AUD" &&
+                            subscription.original_amount !=
+                              null && (
+
+                            <p className="mt-1 text-xs text-slate-400">
+                              Original currency: AUD
+                            </p>
+
+                          )}
+
+                          <p className="mt-2 text-sm text-slate-500">
+                            {subscription.category ||
+                              "Other"}
                           </p>
 
                           <div className="mt-4 space-y-2 text-sm text-slate-500">
@@ -746,7 +1310,9 @@ export default function SubscriptionsPage() {
                             <div className="flex items-center gap-2">
 
                               <CalendarDays
-                                size={16}
+                                size={
+                                  16
+                                }
                                 className="shrink-0 text-green-700"
                               />
 
@@ -764,7 +1330,9 @@ export default function SubscriptionsPage() {
                               <div className="flex items-center gap-2">
 
                                 <Bell
-                                  size={16}
+                                  size={
+                                    16
+                                  }
                                   className="shrink-0 text-green-700"
                                 />
 
@@ -777,7 +1345,8 @@ export default function SubscriptionsPage() {
                                   {subscription.reminder_time?.slice(
                                     0,
                                     5
-                                  ) || "09:00"}
+                                  ) ||
+                                    "09:00"}
                                 </span>
 
                               </div>
@@ -805,7 +1374,11 @@ export default function SubscriptionsPage() {
                               }
                               className="inline-flex items-center gap-2 rounded-xl bg-green-50 px-3 py-2 text-sm font-semibold text-green-700 transition hover:bg-green-100"
                             >
-                              <Play size={15} />
+                              <Play
+                                size={
+                                  15
+                                }
+                              />
                               Activate
                             </button>
 
@@ -824,7 +1397,11 @@ export default function SubscriptionsPage() {
                               }
                               className="inline-flex items-center gap-2 rounded-xl bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-700 transition hover:bg-amber-100"
                             >
-                              <Pause size={15} />
+                              <Pause
+                                size={
+                                  15
+                                }
+                              />
                               Pause
                             </button>
 
@@ -858,7 +1435,11 @@ export default function SubscriptionsPage() {
                             title="Delete subscription"
                             className="rounded-xl bg-red-50 p-2.5 text-red-600 transition hover:bg-red-100"
                           >
-                            <Trash2 size={17} />
+                            <Trash2
+                              size={
+                                17
+                              }
+                            />
                           </button>
 
                         </div>
@@ -887,13 +1468,17 @@ export default function SubscriptionsPage() {
           </p>
 
           <p className="mt-1">
-            Pause, activate, and cancel currently update the status inside Coinest only.
-            They do not cancel or pause the subscription with the actual provider.
+            AUD and IDR subscriptions are supported. IDR prices are converted to AUD internally so your dashboard totals remain consistent, while the original Rupiah value is preserved.
+          </p>
+
+          <p className="mt-2">
+            Pause, activate, and cancel currently update the status inside Coinest only. They do not change the subscription with the actual provider.
           </p>
 
         </div>
 
       </div>
+
     </main>
   );
 }

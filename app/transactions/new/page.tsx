@@ -3,15 +3,19 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+
 import {
   ArrowLeft,
   Wallet,
   TrendingDown,
   TrendingUp,
   Save,
+  RefreshCw,
 } from "lucide-react";
 
 import { supabase } from "@/lib/supabase";
+
+type Currency = "AUD" | "IDR";
 
 export default function NewTransactionPage() {
   const router = useRouter();
@@ -19,6 +23,9 @@ export default function NewTransactionPage() {
   const [date, setDate] = useState("");
   const [description, setDescription] = useState("");
   const [amount, setAmount] = useState("");
+
+  const [currency, setCurrency] =
+    useState<Currency>("AUD");
 
   const [type, setType] = useState<
     "income" | "expense"
@@ -68,60 +75,123 @@ export default function NewTransactionPage() {
     setLoading(true);
     setMessage("");
 
-    const numericAmount = Number(amount);
+    try {
+      const numericAmount =
+        Number(amount);
 
-    if (
-      !Number.isFinite(numericAmount) ||
-      numericAmount <= 0
-    ) {
+      if (
+        !Number.isFinite(numericAmount) ||
+        numericAmount <= 0
+      ) {
+        setMessage(
+          "Please enter a valid amount."
+        );
+
+        return;
+      }
+
+      let normalizedAUDAmount =
+        numericAmount;
+
+      /*
+        All dashboard calculations use AUD internally.
+
+        AUD:
+        original_amount = amount
+        amount = amount
+
+        IDR:
+        original_amount = IDR entered
+        amount = converted AUD
+      */
+
+      if (currency === "IDR") {
+        const rateResponse =
+          await fetch(
+            "/api/exchange-rate"
+          );
+
+        if (!rateResponse.ok) {
+          throw new Error(
+            "Could not get the AUD/IDR exchange rate."
+          );
+        }
+
+        const rateData =
+          await rateResponse.json();
+
+        const audToIdr =
+          Number(
+            rateData.rate
+          );
+
+        if (
+          !Number.isFinite(audToIdr) ||
+          audToIdr <= 0
+        ) {
+          throw new Error(
+            "Invalid exchange rate returned."
+          );
+        }
+
+        normalizedAUDAmount =
+          numericAmount /
+          audToIdr;
+      }
+
+      const { error } =
+        await supabase
+          .from("transactions")
+          .insert([
+            {
+              date,
+              description,
+
+              // Normalized AUD value
+              amount:
+                normalizedAUDAmount,
+
+              // Exactly what the user entered
+              original_amount:
+                numericAmount,
+
+              currency,
+
+              type,
+              category,
+
+              source:
+                "manual",
+            },
+          ]);
+
+      if (error) {
+        throw error;
+      }
+
       setMessage(
-        "Please enter a valid amount."
+        "Transaction added successfully!"
       );
 
+      setDate("");
+      setDescription("");
+      setAmount("");
+      setCurrency("AUD");
+      setType("expense");
+      setCategory("");
+
+      router.refresh();
+    } catch (err) {
+      console.error(err);
+
+      setMessage(
+        err instanceof Error
+          ? `Error: ${err.message}`
+          : "Error: Could not save transaction."
+      );
+    } finally {
       setLoading(false);
-      return;
     }
-
-    const { error } = await supabase
-      .from("transactions")
-      .insert([
-        {
-          date,
-          description,
-          amount: numericAmount,
-
-          // Manual entries are currently stored in AUD
-          currency: "AUD",
-          original_amount:
-            numericAmount,
-
-          type,
-          category,
-          source: "manual",
-        },
-      ]);
-
-    setLoading(false);
-
-    if (error) {
-      setMessage(
-        `Error: ${error.message}`
-      );
-
-      return;
-    }
-
-    setMessage(
-      "Transaction added successfully!"
-    );
-
-    setDate("");
-    setDescription("");
-    setAmount("");
-    setType("expense");
-    setCategory("");
-
-    router.refresh();
   }
 
   return (
@@ -142,6 +212,7 @@ export default function NewTransactionPage() {
           </Link>
 
           <div className="flex items-center gap-2 text-green-800">
+
             <div className="rounded-xl bg-green-800 p-2.5 text-white">
               <Wallet size={18} />
             </div>
@@ -149,6 +220,7 @@ export default function NewTransactionPage() {
             <span className="hidden font-bold sm:block">
               Coinest
             </span>
+
           </div>
 
         </div>
@@ -166,19 +238,19 @@ export default function NewTransactionPage() {
           </h1>
 
           <p className="mt-2 text-sm text-slate-500 sm:text-base">
-            Add income or spending manually to your dashboard.
+            Add income or spending manually in AUD or IDR.
           </p>
 
         </div>
 
-        {/* FORM CARD */}
+        {/* FORM */}
 
         <form
           onSubmit={handleSubmit}
           className="overflow-hidden rounded-[28px] bg-white shadow-sm"
         >
 
-          {/* TYPE SELECTOR */}
+          {/* TYPE */}
 
           <div className="border-b border-slate-100 p-5 sm:p-6">
 
@@ -224,8 +296,6 @@ export default function NewTransactionPage() {
 
           </div>
 
-          {/* INPUT AREA */}
-
           <div className="space-y-5 p-5 sm:p-6">
 
             {/* DATE */}
@@ -240,7 +310,9 @@ export default function NewTransactionPage() {
                 type="date"
                 value={date}
                 onChange={(e) =>
-                  setDate(e.target.value)
+                  setDate(
+                    e.target.value
+                  )
                 }
                 required
                 className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3.5 outline-none transition focus:border-green-700 focus:bg-white focus:ring-2 focus:ring-green-100"
@@ -260,7 +332,7 @@ export default function NewTransactionPage() {
                 type="text"
                 placeholder={
                   type === "expense"
-                    ? "e.g. Woolworths"
+                    ? "e.g. Woolworths or Indomaret"
                     : "e.g. Salary"
                 }
                 value={description}
@@ -275,25 +347,85 @@ export default function NewTransactionPage() {
 
             </div>
 
+            {/* CURRENCY */}
+
+            <div>
+
+              <label className="mb-2 block text-sm font-semibold text-slate-700">
+                Currency
+              </label>
+
+              <div className="grid grid-cols-2 gap-3">
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    setCurrency(
+                      "AUD"
+                    )
+                  }
+                  className={`rounded-2xl border p-3.5 font-semibold transition ${
+                    currency === "AUD"
+                      ? "border-green-700 bg-[#eff5ea] text-green-800"
+                      : "border-slate-200 text-slate-500 hover:bg-slate-50"
+                  }`}
+                >
+                  🇦🇺 AUD
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    setCurrency(
+                      "IDR"
+                    )
+                  }
+                  className={`rounded-2xl border p-3.5 font-semibold transition ${
+                    currency === "IDR"
+                      ? "border-green-700 bg-[#eff5ea] text-green-800"
+                      : "border-slate-200 text-slate-500 hover:bg-slate-50"
+                  }`}
+                >
+                  🇮🇩 IDR
+                </button>
+
+              </div>
+
+            </div>
+
             {/* AMOUNT */}
 
             <div>
 
               <label className="mb-2 block text-sm font-semibold text-slate-700">
-                Amount
+                Amount ({currency})
               </label>
 
               <div className="relative">
 
                 <div className="absolute inset-y-0 left-0 flex items-center pl-4 font-semibold text-slate-500">
-                  A$
+                  {currency === "AUD"
+                    ? "A$"
+                    : "Rp"}
                 </div>
 
                 <input
                   type="number"
-                  step="0.01"
-                  min="0.01"
-                  placeholder="0.00"
+                  step={
+                    currency === "IDR"
+                      ? "1"
+                      : "0.01"
+                  }
+                  min={
+                    currency === "IDR"
+                      ? "1"
+                      : "0.01"
+                  }
+                  placeholder={
+                    currency === "AUD"
+                      ? "0.00"
+                      : "150000"
+                  }
                   value={amount}
                   onChange={(e) =>
                     setAmount(
@@ -301,14 +433,27 @@ export default function NewTransactionPage() {
                     )
                   }
                   required
-                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3.5 pl-12 pr-4 text-lg font-semibold outline-none transition focus:border-green-700 focus:bg-white focus:ring-2 focus:ring-green-100"
+                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3.5 pl-14 pr-4 text-lg font-semibold outline-none transition focus:border-green-700 focus:bg-white focus:ring-2 focus:ring-green-100"
                 />
 
               </div>
 
-              <p className="mt-2 text-xs text-slate-400">
-                Manual transactions are currently entered in AUD.
-              </p>
+              <div className="mt-2 flex items-start gap-2 text-xs text-slate-400">
+
+                {currency === "IDR" && (
+                  <RefreshCw
+                    size={13}
+                    className="mt-0.5 shrink-0"
+                  />
+                )}
+
+                <p>
+                  {currency === "AUD"
+                    ? "This transaction will be stored directly as AUD."
+                    : "The original IDR value will be preserved and converted to AUD using the live exchange rate when saved."}
+                </p>
+
+              </div>
 
             </div>
 
@@ -353,6 +498,7 @@ export default function NewTransactionPage() {
             {/* MESSAGE */}
 
             {message && (
+
               <div
                 className={`rounded-2xl border p-4 text-sm ${
                   message.startsWith(
@@ -367,6 +513,7 @@ export default function NewTransactionPage() {
               >
                 {message}
               </div>
+
             )}
 
             {/* SUBMIT */}
@@ -379,7 +526,9 @@ export default function NewTransactionPage() {
               <Save size={18} />
 
               {loading
-                ? "Adding..."
+                ? currency === "IDR"
+                  ? "Converting & Saving..."
+                  : "Adding..."
                 : "Add Transaction"}
             </button>
 
@@ -387,7 +536,7 @@ export default function NewTransactionPage() {
 
         </form>
 
-        {/* FOOT NOTE */}
+        {/* TIP */}
 
         <div className="mt-5 rounded-2xl bg-[#eff5ea] p-4 text-sm text-slate-600">
 
@@ -396,7 +545,7 @@ export default function NewTransactionPage() {
           </p>
 
           <p className="mt-1">
-            Have a receipt instead? Use the receipt scanner and Coinest can extract the transaction automatically.
+            Have a receipt instead? Coinest can detect whether it is AUD or IDR automatically.
           </p>
 
           <Link
