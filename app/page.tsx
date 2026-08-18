@@ -111,6 +111,7 @@ const chartColors = [
   "#14b8a6",
 ];
 
+
 /* =========================================================
    FORMATTERS
 ========================================================= */
@@ -322,6 +323,12 @@ export default function DashboardPage() {
   const [
     mobileNotificationsOpen,
     setMobileNotificationsOpen,
+  ] =
+    useState(false);
+
+  const [
+    mobileToolsOpen,
+    setMobileToolsOpen,
   ] =
     useState(false);
 
@@ -1079,15 +1086,16 @@ export default function DashboardPage() {
                 CSV Import
               </Link>
 
-              <button
-                type="button"
-                className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left text-slate-600 transition hover:bg-white"
+              <Link
+                href="/settings"
+                className="flex items-center gap-3 rounded-xl px-4 py-3 text-slate-600 transition hover:bg-white"
               >
                 <Settings
                   size={18}
                 />
                 Settings
-              </button>
+              </Link>
+
 
             </nav>
 
@@ -1223,25 +1231,136 @@ export default function DashboardPage() {
 
               <div className="flex items-center justify-between">
 
-                <div className="flex items-center gap-3">
+                <div className="relative">
 
-                  <div className="rounded-xl bg-green-800 p-2.5 text-white">
-                    <Wallet
-                      size={18}
-                    />
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMobileToolsOpen(
+                        !mobileToolsOpen
+                      );
 
-                  <div>
+                      setMobileSearchOpen(
+                        false
+                      );
 
-                    <p className="font-bold">
-                      Coinest
-                    </p>
+                      setMobileNotificationsOpen(
+                        false
+                      );
+                    }}
+                    className="flex items-center gap-3 text-left"
+                    aria-expanded={mobileToolsOpen}
+                    aria-label="Open Coinest tools"
+                  >
 
-                    <p className="text-xs text-slate-500">
-                      Dashboard
-                    </p>
+                    <div className="rounded-xl bg-green-800 p-2.5 text-white">
+                      <Wallet
+                        size={18}
+                      />
+                    </div>
 
-                  </div>
+                    <div>
+
+                      <p className="font-bold">
+                        Coinest
+                      </p>
+
+                      <p className="text-xs text-slate-500">
+                        Dashboard
+                      </p>
+
+                    </div>
+
+                  </button>
+
+                  {mobileToolsOpen && (
+
+                    <>
+                      <button
+                        type="button"
+                        aria-label="Close Coinest tools"
+                        onClick={() =>
+                          setMobileToolsOpen(
+                            false
+                          )
+                        }
+                        className="fixed inset-0 z-40 cursor-default"
+                      />
+
+                      <div className="absolute left-0 top-[calc(100%+12px)] z-50 w-[270px] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
+
+                        <div className="border-b border-slate-100 px-4 py-3">
+
+                          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                            Coinest tools
+                          </p>
+
+                        </div>
+
+                        <Link
+                          href="/import"
+                          onClick={() =>
+                            setMobileToolsOpen(
+                              false
+                            )
+                          }
+                          className="flex items-center gap-3 px-4 py-4 transition hover:bg-slate-50"
+                        >
+
+                          <div className="rounded-xl bg-[#eff5ea] p-2.5 text-green-800">
+                            <Upload
+                              size={18}
+                            />
+                          </div>
+
+                          <div className="min-w-0">
+
+                            <p className="text-sm font-semibold">
+                              CSV Import
+                            </p>
+
+                            <p className="text-xs text-slate-500">
+                              Import bank transactions
+                            </p>
+
+                          </div>
+
+                        </Link>
+
+                        <Link
+                          href="/settings"
+                          onClick={() =>
+                            setMobileToolsOpen(
+                              false
+                            )
+                          }
+                          className="flex items-center gap-3 border-t border-slate-100 px-4 py-4 transition hover:bg-slate-50"
+                        >
+
+                          <div className="rounded-xl bg-[#eff5ea] p-2.5 text-green-800">
+                            <Settings
+                              size={18}
+                            />
+                          </div>
+
+                          <div className="min-w-0">
+
+                            <p className="text-sm font-semibold">
+                              Settings
+                            </p>
+
+                            <p className="text-xs text-slate-500">
+                              Currency & preferences
+                            </p>
+
+                          </div>
+
+                        </Link>
+
+                      </div>
+                    </>
+
+                  )}
 
                 </div>
 
@@ -1257,6 +1376,10 @@ export default function DashboardPage() {
                       );
 
                       setMobileNotificationsOpen(
+                        false
+                      );
+
+                      setMobileToolsOpen(
                         false
                       );
                     }}
@@ -1277,6 +1400,10 @@ export default function DashboardPage() {
                       );
 
                       setMobileSearchOpen(
+                        false
+                      );
+
+                      setMobileToolsOpen(
                         false
                       );
                     }}
