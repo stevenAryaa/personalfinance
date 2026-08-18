@@ -1,7 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+
 import Link from "next/link";
+
 import { supabase } from "@/lib/supabase";
 
 import {
@@ -20,6 +26,8 @@ import {
   CalendarDays,
   RefreshCw,
   Plus,
+  X,
+  ChevronRight,
 } from "lucide-react";
 
 import {
@@ -36,6 +44,10 @@ import {
   Legend,
 } from "recharts";
 
+/* =========================================================
+   TYPES
+========================================================= */
+
 type Transaction = {
   id: string;
   date: string;
@@ -44,8 +56,13 @@ type Transaction = {
   type: "income" | "expense";
   category: string | null;
   source: string | null;
+
   currency?: "AUD" | "IDR";
-  original_amount?: number | string | null;
+
+  original_amount?:
+    | number
+    | string
+    | null;
 };
 
 type Subscription = {
@@ -53,17 +70,36 @@ type Subscription = {
   name: string;
   amount: number | string;
   category: string | null;
-  billing_cycle: "weekly" | "monthly" | "yearly";
+
+  billing_cycle:
+    | "weekly"
+    | "monthly"
+    | "yearly";
+
   next_payment_date: string;
-  status: "active" | "cancelled" | "paused";
+
+  status:
+    | "active"
+    | "cancelled"
+    | "paused";
+
   reminder_enabled: boolean;
+
   reminder_days_before: number;
+
   reminder_time: string | null;
 };
 
-type Currency = "AUD" | "IDR";
+type Currency =
+  | "AUD"
+  | "IDR";
 
-const FALLBACK_AUD_TO_IDR = 12600;
+/* =========================================================
+   CONSTANTS
+========================================================= */
+
+const FALLBACK_AUD_TO_IDR =
+  12600;
 
 const chartColors = [
   "#214f45",
@@ -75,85 +111,269 @@ const chartColors = [
   "#14b8a6",
 ];
 
-function formatAUD(value: number) {
-  return new Intl.NumberFormat("en-AU", {
-    style: "currency",
-    currency: "AUD",
-    maximumFractionDigits: 2,
-  }).format(value);
-}
+/* =========================================================
+   FORMATTERS
+========================================================= */
 
-function formatIDR(value: number) {
-  return new Intl.NumberFormat("id-ID", {
-    style: "currency",
-    currency: "IDR",
-    maximumFractionDigits: 0,
-  }).format(value);
-}
-
-function formatCompactNumber(value: number, currency: Currency) {
-  const formatted = new Intl.NumberFormat(
-    currency === "AUD" ? "en-AU" : "id-ID",
+function formatAUD(
+  value: number
+) {
+  return new Intl.NumberFormat(
+    "en-AU",
     {
-      notation: "compact",
-      maximumFractionDigits: 1,
+      style: "currency",
+      currency: "AUD",
+      maximumFractionDigits: 2,
     }
   ).format(value);
+}
+
+function formatIDR(
+  value: number
+) {
+  return new Intl.NumberFormat(
+    "id-ID",
+    {
+      style: "currency",
+      currency: "IDR",
+      maximumFractionDigits: 0,
+    }
+  ).format(value);
+}
+
+function formatCompactNumber(
+  value: number,
+  currency: Currency
+) {
+  const formatted =
+    new Intl.NumberFormat(
+      currency === "AUD"
+        ? "en-AU"
+        : "id-ID",
+      {
+        notation: "compact",
+        maximumFractionDigits: 1,
+      }
+    ).format(value);
 
   return currency === "AUD"
     ? `A$${formatted}`
     : `Rp${formatted}`;
 }
 
+/* =========================================================
+   DATE HELPERS
+========================================================= */
+
+function getDaysUntil(
+  dateString: string
+) {
+  const today =
+    new Date();
+
+  today.setHours(
+    0,
+    0,
+    0,
+    0
+  );
+
+  const renewalDate =
+    new Date(
+      `${dateString}T00:00:00`
+    );
+
+  const difference =
+    renewalDate.getTime() -
+    today.getTime();
+
+  return Math.ceil(
+    difference /
+      (
+        1000 *
+        60 *
+        60 *
+        24
+      )
+  );
+}
+
+function formatDate(
+  dateString: string
+) {
+  const date =
+    new Date(
+      `${dateString}T00:00:00`
+    );
+
+  return date.toLocaleDateString(
+    "en-AU",
+    {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    }
+  );
+}
+
+/* =========================================================
+   DASHBOARD
+========================================================= */
+
 export default function DashboardPage() {
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
+  /* -------------------------------------------------------
+     DATA
+  ------------------------------------------------------- */
 
-  const [loading, setLoading] = useState(true);
+  const [
+    transactions,
+    setTransactions,
+  ] =
+    useState<Transaction[]>(
+      []
+    );
 
-  const [displayCurrency, setDisplayCurrency] =
-    useState<Currency>("AUD");
+  const [
+    subscriptions,
+    setSubscriptions,
+  ] =
+    useState<Subscription[]>(
+      []
+    );
 
-  const [audToIdr, setAudToIdr] =
-    useState(FALLBACK_AUD_TO_IDR);
-
-  const [exchangeRateDate, setExchangeRateDate] =
-    useState<string | null>(null);
-
-  const [exchangeRateLoading, setExchangeRateLoading] =
+  const [
+    loading,
+    setLoading,
+  ] =
     useState(true);
 
-  const [usingFallbackRate, setUsingFallbackRate] =
+  /* -------------------------------------------------------
+     CURRENCY
+  ------------------------------------------------------- */
+
+  const [
+    displayCurrency,
+    setDisplayCurrency,
+  ] =
+    useState<Currency>(
+      "AUD"
+    );
+
+  const [
+    audToIdr,
+    setAudToIdr,
+  ] =
+    useState(
+      FALLBACK_AUD_TO_IDR
+    );
+
+  const [
+    exchangeRateDate,
+    setExchangeRateDate,
+  ] =
+    useState<
+      string | null
+    >(null);
+
+  const [
+    exchangeRateLoading,
+    setExchangeRateLoading,
+  ] =
+    useState(true);
+
+  const [
+    usingFallbackRate,
+    setUsingFallbackRate,
+  ] =
     useState(false);
+
+  /* -------------------------------------------------------
+     SEARCH
+  ------------------------------------------------------- */
+
+  const [
+    searchQuery,
+    setSearchQuery,
+  ] =
+    useState("");
+
+  const [
+    searchOpen,
+    setSearchOpen,
+  ] =
+    useState(false);
+
+  const [
+    mobileSearchOpen,
+    setMobileSearchOpen,
+  ] =
+    useState(false);
+
+  /* -------------------------------------------------------
+     NOTIFICATIONS
+  ------------------------------------------------------- */
+
+  const [
+    notificationsOpen,
+    setNotificationsOpen,
+  ] =
+    useState(false);
+
+  const [
+    mobileNotificationsOpen,
+    setMobileNotificationsOpen,
+  ] =
+    useState(false);
+
+  /* =======================================================
+     LOAD DATA
+  ======================================================= */
 
   async function loadDashboardData() {
     setLoading(true);
 
-    const [transactionsResult, subscriptionsResult] =
+    const [
+      transactionsResult,
+      subscriptionsResult,
+    ] =
       await Promise.all([
         supabase
-          .from("transactions")
+          .from(
+            "transactions"
+          )
           .select("*")
-          .order("date", {
-            ascending: false,
-          }),
+          .order(
+            "date",
+            {
+              ascending: false,
+            }
+          ),
 
         supabase
-          .from("subscriptions")
+          .from(
+            "subscriptions"
+          )
           .select("*")
-          .order("next_payment_date", {
-            ascending: true,
-          }),
+          .order(
+            "next_payment_date",
+            {
+              ascending: true,
+            }
+          ),
       ]);
 
-    if (transactionsResult.error) {
+    if (
+      transactionsResult.error
+    ) {
       console.error(
         "Transaction error:",
         transactionsResult.error
       );
     }
 
-    if (subscriptionsResult.error) {
+    if (
+      subscriptionsResult.error
+    ) {
       console.error(
         "Subscription error:",
         subscriptionsResult.error
@@ -161,47 +381,98 @@ export default function DashboardPage() {
     }
 
     setTransactions(
-      (transactionsResult.data as Transaction[]) ?? []
+      (
+        transactionsResult.data as
+          Transaction[]
+      ) ?? []
     );
 
     setSubscriptions(
-      (subscriptionsResult.data as Subscription[]) ?? []
+      (
+        subscriptionsResult.data as
+          Subscription[]
+      ) ?? []
     );
 
     setLoading(false);
   }
 
+  /* =======================================================
+     EXCHANGE RATE
+  ======================================================= */
+
   async function loadExchangeRate() {
     try {
-      setExchangeRateLoading(true);
-      setUsingFallbackRate(false);
+      setExchangeRateLoading(
+        true
+      );
 
-      const response = await fetch("/api/exchange-rate", {
-        cache: "no-store",
-      });
+      setUsingFallbackRate(
+        false
+      );
+
+      const response =
+        await fetch(
+          "/api/exchange-rate",
+          {
+            cache:
+              "no-store",
+          }
+        );
 
       if (!response.ok) {
-        throw new Error("Could not fetch exchange rate");
+        throw new Error(
+          "Could not fetch exchange rate"
+        );
       }
 
-      const data = await response.json();
+      const data =
+        await response.json();
 
-      const rate = Number(data.rate);
+      const rate =
+        Number(
+          data.rate
+        );
 
-      if (!Number.isFinite(rate) || rate <= 0) {
-        throw new Error("Invalid exchange rate returned");
+      if (
+        !Number.isFinite(
+          rate
+        ) ||
+        rate <= 0
+      ) {
+        throw new Error(
+          "Invalid exchange rate returned"
+        );
       }
 
-      setAudToIdr(rate);
-      setExchangeRateDate(data.date ?? null);
+      setAudToIdr(
+        rate
+      );
+
+      setExchangeRateDate(
+        data.date ?? null
+      );
     } catch (error) {
-      console.error("Exchange rate error:", error);
+      console.error(
+        "Exchange rate error:",
+        error
+      );
 
-      setAudToIdr(FALLBACK_AUD_TO_IDR);
-      setExchangeRateDate(null);
-      setUsingFallbackRate(true);
+      setAudToIdr(
+        FALLBACK_AUD_TO_IDR
+      );
+
+      setExchangeRateDate(
+        null
+      );
+
+      setUsingFallbackRate(
+        true
+      );
     } finally {
-      setExchangeRateLoading(false);
+      setExchangeRateLoading(
+        false
+      );
     }
   }
 
@@ -210,167 +481,510 @@ export default function DashboardPage() {
     loadExchangeRate();
   }, []);
 
-  const activeSubscriptions = useMemo(() => {
-    return subscriptions.filter(
-      (subscription) => subscription.status === "active"
-    );
-  }, [subscriptions]);
+  /* =======================================================
+     SUBSCRIPTIONS
+  ======================================================= */
 
-  const estimatedMonthlySubscriptionCost = useMemo(() => {
-    return activeSubscriptions.reduce(
-      (total, subscription) => {
-        const amount = Number(subscription.amount);
+  const activeSubscriptions =
+    useMemo(() => {
+      return subscriptions.filter(
+        (
+          subscription
+        ) =>
+          subscription.status ===
+          "active"
+      );
+    }, [
+      subscriptions,
+    ]);
 
-        if (subscription.billing_cycle === "weekly") {
-          return total + (amount * 52) / 12;
-        }
+  const estimatedMonthlySubscriptionCost =
+    useMemo(() => {
+      return activeSubscriptions.reduce(
+        (
+          total,
+          subscription
+        ) => {
+          const amount =
+            Number(
+              subscription.amount
+            );
 
-        if (subscription.billing_cycle === "yearly") {
-          return total + amount / 12;
-        }
+          if (
+            subscription.billing_cycle ===
+            "weekly"
+          ) {
+            return (
+              total +
+              (amount *
+                52) /
+                12
+            );
+          }
 
-        return total + amount;
-      },
-      0
-    );
-  }, [activeSubscriptions]);
+          if (
+            subscription.billing_cycle ===
+            "yearly"
+          ) {
+            return (
+              total +
+              amount /
+                12
+            );
+          }
 
-  const totalIncome = useMemo(() => {
-    return transactions
-      .filter((transaction) => transaction.type === "income")
-      .reduce(
-        (total, transaction) =>
-          total + Number(transaction.amount),
+          return (
+            total +
+            amount
+          );
+        },
         0
       );
-  }, [transactions]);
+    }, [
+      activeSubscriptions,
+    ]);
 
-  const totalExpenses = useMemo(() => {
-    return transactions
-      .filter((transaction) => transaction.type === "expense")
-      .reduce(
-        (total, transaction) =>
-          total + Number(transaction.amount),
-        0
+  /* =======================================================
+     FINANCIAL TOTALS
+  ======================================================= */
+
+  const totalIncome =
+    useMemo(() => {
+      return transactions
+        .filter(
+          (
+            transaction
+          ) =>
+            transaction.type ===
+            "income"
+        )
+        .reduce(
+          (
+            total,
+            transaction
+          ) =>
+            total +
+            Number(
+              transaction.amount
+            ),
+          0
+        );
+    }, [
+      transactions,
+    ]);
+
+  const totalExpenses =
+    useMemo(() => {
+      return transactions
+        .filter(
+          (
+            transaction
+          ) =>
+            transaction.type ===
+            "expense"
+        )
+        .reduce(
+          (
+            total,
+            transaction
+          ) =>
+            total +
+            Number(
+              transaction.amount
+            ),
+          0
+        );
+    }, [
+      transactions,
+    ]);
+
+  const totalBalance =
+    totalIncome -
+    totalExpenses;
+
+  /* =======================================================
+     MONEY FORMAT
+  ======================================================= */
+
+  function formatMoney(
+    audValue: number
+  ) {
+    if (
+      displayCurrency ===
+      "AUD"
+    ) {
+      return formatAUD(
+        audValue
       );
-  }, [transactions]);
-
-  const totalBalance = totalIncome - totalExpenses;
-
-  function formatMoney(audValue: number) {
-    if (displayCurrency === "AUD") {
-      return formatAUD(audValue);
     }
 
-    return formatIDR(audValue * audToIdr);
+    return formatIDR(
+      audValue *
+        audToIdr
+    );
   }
 
-  const last6MonthsData = useMemo(() => {
-    const now = new Date();
+  /* =======================================================
+     SEARCH
+  ======================================================= */
 
-    const months: {
-      key: string;
-      label: string;
-      income: number;
-      expense: number;
-    }[] = [];
+  const searchResults =
+    useMemo(() => {
+      const query =
+        searchQuery
+          .trim()
+          .toLowerCase();
 
-    for (let i = 5; i >= 0; i--) {
-      const date = new Date(
-        now.getFullYear(),
-        now.getMonth() - i,
-        1
-      );
-
-      const key = `${date.getFullYear()}-${String(
-        date.getMonth() + 1
-      ).padStart(2, "0")}`;
-
-      months.push({
-        key,
-        label: date.toLocaleString("en-AU", {
-          month: "short",
-        }),
-        income: 0,
-        expense: 0,
-      });
-    }
-
-    transactions.forEach((transaction) => {
-      const transactionDate = new Date(transaction.date);
-
-      const key = `${transactionDate.getFullYear()}-${String(
-        transactionDate.getMonth() + 1
-      ).padStart(2, "0")}`;
-
-      const targetMonth = months.find(
-        (month) => month.key === key
-      );
-
-      if (!targetMonth) return;
-
-      if (transaction.type === "income") {
-        targetMonth.income += Number(transaction.amount);
-      } else {
-        targetMonth.expense += Number(transaction.amount);
+      if (!query) {
+        return [];
       }
-    });
 
-    const converted = months.map((month) => ({
-      month: month.label,
+      return transactions
+        .filter(
+          (
+            transaction
+          ) => {
+            const description =
+              (
+                transaction.description ??
+                ""
+              ).toLowerCase();
 
-      income:
-        displayCurrency === "AUD"
-          ? month.income
-          : month.income * audToIdr,
+            const category =
+              (
+                transaction.category ??
+                ""
+              ).toLowerCase();
 
-      expense:
-        displayCurrency === "AUD"
-          ? month.expense
-          : month.expense * audToIdr,
-    }));
+            const source =
+              (
+                transaction.source ??
+                ""
+              ).toLowerCase();
 
-    const nonEmptyMonths = converted.filter(
-      (month) => month.income > 0 || month.expense > 0
+            const type =
+              (
+                transaction.type ??
+                ""
+              ).toLowerCase();
+
+            const date =
+              transaction.date ??
+              "";
+
+            return (
+              description.includes(
+                query
+              ) ||
+              category.includes(
+                query
+              ) ||
+              source.includes(
+                query
+              ) ||
+              type.includes(
+                query
+              ) ||
+              date.includes(
+                query
+              )
+            );
+          }
+        )
+        .slice(
+          0,
+          10
+        );
+    }, [
+      transactions,
+      searchQuery,
+    ]);
+
+  /* =======================================================
+     NOTIFICATIONS
+  ======================================================= */
+
+  const subscriptionNotifications =
+    useMemo(() => {
+      return activeSubscriptions
+        .filter(
+          (
+            subscription
+          ) => {
+            if (
+              !subscription.reminder_enabled
+            ) {
+              return false;
+            }
+
+            const daysUntil =
+              getDaysUntil(
+                subscription.next_payment_date
+              );
+
+            return (
+              daysUntil >=
+                0 &&
+              daysUntil <=
+                subscription.reminder_days_before
+            );
+          }
+        )
+        .sort(
+          (
+            a,
+            b
+          ) => {
+            return (
+              new Date(
+                `${a.next_payment_date}T00:00:00`
+              ).getTime() -
+              new Date(
+                `${b.next_payment_date}T00:00:00`
+              ).getTime()
+            );
+          }
+        );
+    }, [
+      activeSubscriptions,
+    ]);
+
+  /* =======================================================
+     CHART DATA
+  ======================================================= */
+
+  const last6MonthsData =
+    useMemo(() => {
+      const now =
+        new Date();
+
+      const months: {
+        key: string;
+        label: string;
+        income: number;
+        expense: number;
+      }[] = [];
+
+      for (
+        let i = 5;
+        i >= 0;
+        i--
+      ) {
+        const date =
+          new Date(
+            now.getFullYear(),
+            now.getMonth() -
+              i,
+            1
+          );
+
+        const key = `${date.getFullYear()}-${String(
+          date.getMonth() +
+            1
+        ).padStart(
+          2,
+          "0"
+        )}`;
+
+        months.push({
+          key,
+
+          label:
+            date.toLocaleString(
+              "en-AU",
+              {
+                month:
+                  "short",
+              }
+            ),
+
+          income: 0,
+          expense: 0,
+        });
+      }
+
+      transactions.forEach(
+        (
+          transaction
+        ) => {
+          const transactionDate =
+            new Date(
+              transaction.date
+            );
+
+          const key = `${transactionDate.getFullYear()}-${String(
+            transactionDate.getMonth() +
+              1
+          ).padStart(
+            2,
+            "0"
+          )}`;
+
+          const targetMonth =
+            months.find(
+              (
+                month
+              ) =>
+                month.key ===
+                key
+            );
+
+          if (
+            !targetMonth
+          ) {
+            return;
+          }
+
+          if (
+            transaction.type ===
+            "income"
+          ) {
+            targetMonth.income +=
+              Number(
+                transaction.amount
+              );
+          } else {
+            targetMonth.expense +=
+              Number(
+                transaction.amount
+              );
+          }
+        }
+      );
+
+      const converted =
+        months.map(
+          (
+            month
+          ) => ({
+            month:
+              month.label,
+
+            income:
+              displayCurrency ===
+              "AUD"
+                ? month.income
+                : month.income *
+                  audToIdr,
+
+            expense:
+              displayCurrency ===
+              "AUD"
+                ? month.expense
+                : month.expense *
+                  audToIdr,
+          })
+        );
+
+      const nonEmptyMonths =
+        converted.filter(
+          (
+            month
+          ) =>
+            month.income >
+              0 ||
+            month.expense >
+              0
+        );
+
+      return nonEmptyMonths.length >
+        0
+        ? nonEmptyMonths
+        : converted;
+    }, [
+      transactions,
+      displayCurrency,
+      audToIdr,
+    ]);
+
+  const spendingByCategory =
+    useMemo(() => {
+      const totals: Record<
+        string,
+        number
+      > = {};
+
+      transactions
+        .filter(
+          (
+            transaction
+          ) =>
+            transaction.type ===
+            "expense"
+        )
+        .forEach(
+          (
+            transaction
+          ) => {
+            const category =
+              transaction.category ||
+              "Other";
+
+            totals[
+              category
+            ] =
+              (
+                totals[
+                  category
+                ] || 0
+              ) +
+              Number(
+                transaction.amount
+              );
+          }
+        );
+
+      return Object.entries(
+        totals
+      )
+        .map(
+          ([
+            name,
+            value,
+          ]) => ({
+            name,
+
+            value:
+              displayCurrency ===
+              "AUD"
+                ? value
+                : value *
+                  audToIdr,
+          })
+        )
+        .sort(
+          (
+            a,
+            b
+          ) =>
+            b.value -
+            a.value
+        );
+    }, [
+      transactions,
+      displayCurrency,
+      audToIdr,
+    ]);
+
+  const recentTransactions =
+    transactions.slice(
+      0,
+      5
     );
 
-    return nonEmptyMonths.length > 0
-      ? nonEmptyMonths
-      : converted;
-  }, [transactions, displayCurrency, audToIdr]);
-
-  const spendingByCategory = useMemo(() => {
-    const totals: Record<string, number> = {};
-
-    transactions
-      .filter((transaction) => transaction.type === "expense")
-      .forEach((transaction) => {
-        const category = transaction.category || "Other";
-
-        totals[category] =
-          (totals[category] || 0) +
-          Number(transaction.amount);
-      });
-
-    return Object.entries(totals)
-      .map(([name, value]) => ({
-        name,
-
-        value:
-          displayCurrency === "AUD"
-            ? value
-            : value * audToIdr,
-      }))
-      .sort((a, b) => b.value - a.value);
-  }, [transactions, displayCurrency, audToIdr]);
-
-  const recentTransactions = transactions.slice(0, 5);
-
   const upcomingSubscriptions =
-    activeSubscriptions.slice(0, 4);
+    activeSubscriptions.slice(
+      0,
+      4
+    );
+
+  /* =======================================================
+     UI
+  ======================================================= */
 
   return (
     <main className="min-h-screen bg-[#eef4ee] text-slate-900">
+
       <div className="mx-auto min-h-screen max-w-7xl bg-white lg:my-6 lg:min-h-0 lg:overflow-hidden lg:rounded-[28px] lg:shadow-xl">
 
         <div className="grid lg:grid-cols-[240px_1fr]">
@@ -384,10 +998,13 @@ export default function DashboardPage() {
             <div className="mb-8 flex items-center gap-3">
 
               <div className="rounded-xl bg-green-800 p-3 text-white">
-                <Wallet size={20} />
+                <Wallet
+                  size={20}
+                />
               </div>
 
               <div>
+
                 <p className="text-lg font-bold">
                   Coinest
                 </p>
@@ -395,6 +1012,7 @@ export default function DashboardPage() {
                 <p className="text-sm text-slate-500">
                   Personal Finance
                 </p>
+
               </div>
 
             </div>
@@ -405,7 +1023,9 @@ export default function DashboardPage() {
                 href="/"
                 className="flex items-center gap-3 rounded-xl bg-lime-200 px-4 py-3 font-medium"
               >
-                <LayoutDashboard size={18} />
+                <LayoutDashboard
+                  size={18}
+                />
                 Dashboard
               </Link>
 
@@ -413,7 +1033,9 @@ export default function DashboardPage() {
                 href="/transactions/new"
                 className="flex items-center gap-3 rounded-xl px-4 py-3 text-slate-600 transition hover:bg-white"
               >
-                <ArrowLeftRight size={18} />
+                <ArrowLeftRight
+                  size={18}
+                />
                 Transactions
               </Link>
 
@@ -421,7 +1043,9 @@ export default function DashboardPage() {
                 href="/subscriptions"
                 className="flex items-center gap-3 rounded-xl px-4 py-3 text-slate-600 transition hover:bg-white"
               >
-                <Repeat2 size={18} />
+                <Repeat2
+                  size={18}
+                />
                 Subscriptions
               </Link>
 
@@ -429,7 +1053,9 @@ export default function DashboardPage() {
                 href="/scan"
                 className="flex items-center gap-3 rounded-xl px-4 py-3 text-slate-600 transition hover:bg-white"
               >
-                <Camera size={18} />
+                <Camera
+                  size={18}
+                />
                 Scan Receipt
               </Link>
 
@@ -437,7 +1063,9 @@ export default function DashboardPage() {
                 href="/analysis"
                 className="flex items-center gap-3 rounded-xl px-4 py-3 text-slate-600 transition hover:bg-white"
               >
-                <Sparkles size={18} />
+                <Sparkles
+                  size={18}
+                />
                 AI Analysis
               </Link>
 
@@ -445,7 +1073,9 @@ export default function DashboardPage() {
                 href="/import"
                 className="flex items-center gap-3 rounded-xl px-4 py-3 text-slate-600 transition hover:bg-white"
               >
-                <Upload size={18} />
+                <Upload
+                  size={18}
+                />
                 CSV Import
               </Link>
 
@@ -453,13 +1083,15 @@ export default function DashboardPage() {
                 type="button"
                 className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left text-slate-600 transition hover:bg-white"
               >
-                <Settings size={18} />
+                <Settings
+                  size={18}
+                />
                 Settings
               </button>
 
             </nav>
 
-            {/* DESKTOP CURRENCY CARD */}
+            {/* DESKTOP CURRENCY */}
 
             <div className="mt-10 rounded-2xl bg-green-900 p-5 text-white">
 
@@ -471,9 +1103,14 @@ export default function DashboardPage() {
 
                 <button
                   type="button"
-                  onClick={() => setDisplayCurrency("AUD")}
+                  onClick={() =>
+                    setDisplayCurrency(
+                      "AUD"
+                    )
+                  }
                   className={`rounded-xl px-4 py-2 text-sm font-semibold ${
-                    displayCurrency === "AUD"
+                    displayCurrency ===
+                    "AUD"
                       ? "bg-lime-200 text-slate-900"
                       : "bg-white/10"
                   }`}
@@ -483,9 +1120,14 @@ export default function DashboardPage() {
 
                 <button
                   type="button"
-                  onClick={() => setDisplayCurrency("IDR")}
+                  onClick={() =>
+                    setDisplayCurrency(
+                      "IDR"
+                    )
+                  }
                   className={`rounded-xl px-4 py-2 text-sm font-semibold ${
-                    displayCurrency === "IDR"
+                    displayCurrency ===
+                    "IDR"
                       ? "bg-lime-200 text-slate-900"
                       : "bg-white/10"
                   }`}
@@ -500,23 +1142,34 @@ export default function DashboardPage() {
                 <div className="flex items-center justify-between">
 
                   <div>
+
                     <p className="text-xs text-green-100">
                       AUD → IDR
                     </p>
 
                     <p className="mt-1 text-sm font-semibold">
+
                       {exchangeRateLoading
                         ? "Loading..."
-                        : `1 AUD = ${formatIDR(audToIdr)}`}
+                        : `1 AUD = ${formatIDR(
+                            audToIdr
+                          )}`}
+
                     </p>
+
                   </div>
 
                   <button
                     type="button"
-                    onClick={loadExchangeRate}
-                    disabled={exchangeRateLoading}
+                    onClick={
+                      loadExchangeRate
+                    }
+                    disabled={
+                      exchangeRateLoading
+                    }
                     className="rounded-lg p-2"
                   >
+
                     <RefreshCw
                       size={15}
                       className={
@@ -525,21 +1178,29 @@ export default function DashboardPage() {
                           : ""
                       }
                     />
+
                   </button>
 
                 </div>
 
                 {exchangeRateDate &&
                   !usingFallbackRate && (
+
                     <p className="mt-2 text-xs text-green-200">
-                      Rate date: {exchangeRateDate}
+                      Rate date:{" "}
+                      {
+                        exchangeRateDate
+                      }
                     </p>
+
                   )}
 
                 {usingFallbackRate && (
+
                   <p className="mt-2 text-xs text-amber-200">
                     Using fallback exchange rate
                   </p>
+
                 )}
 
               </div>
@@ -565,10 +1226,13 @@ export default function DashboardPage() {
                 <div className="flex items-center gap-3">
 
                   <div className="rounded-xl bg-green-800 p-2.5 text-white">
-                    <Wallet size={18} />
+                    <Wallet
+                      size={18}
+                    />
                   </div>
 
                   <div>
+
                     <p className="font-bold">
                       Coinest
                     </p>
@@ -576,31 +1240,73 @@ export default function DashboardPage() {
                     <p className="text-xs text-slate-500">
                       Dashboard
                     </p>
+
                   </div>
 
                 </div>
 
                 <div className="flex items-center gap-2">
 
-                  <button
-                    type="button"
-                    className="rounded-xl border border-slate-200 p-2.5"
-                  >
-                    <Search size={18} />
-                  </button>
+                  {/* MOBILE SEARCH */}
 
                   <button
                     type="button"
+                    onClick={() => {
+                      setMobileSearchOpen(
+                        true
+                      );
+
+                      setMobileNotificationsOpen(
+                        false
+                      );
+                    }}
                     className="rounded-xl border border-slate-200 p-2.5"
                   >
-                    <Bell size={18} />
+                    <Search
+                      size={18}
+                    />
+                  </button>
+
+                  {/* MOBILE NOTIFICATIONS */}
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMobileNotificationsOpen(
+                        true
+                      );
+
+                      setMobileSearchOpen(
+                        false
+                      );
+                    }}
+                    className="relative rounded-xl border border-slate-200 p-2.5"
+                  >
+
+                    <Bell
+                      size={18}
+                    />
+
+                    {subscriptionNotifications.length >
+                      0 && (
+
+                      <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white">
+
+                        {
+                          subscriptionNotifications.length
+                        }
+
+                      </span>
+
+                    )}
+
                   </button>
 
                 </div>
 
               </div>
 
-              {/* MOBILE CURRENCY TOGGLE */}
+              {/* MOBILE CURRENCY */}
 
               <div className="mt-4 flex items-center justify-between rounded-2xl bg-[#eff5ea] p-2">
 
@@ -608,9 +1314,14 @@ export default function DashboardPage() {
 
                   <button
                     type="button"
-                    onClick={() => setDisplayCurrency("AUD")}
+                    onClick={() =>
+                      setDisplayCurrency(
+                        "AUD"
+                      )
+                    }
                     className={`rounded-xl px-4 py-2 text-sm font-semibold ${
-                      displayCurrency === "AUD"
+                      displayCurrency ===
+                      "AUD"
                         ? "bg-green-800 text-white"
                         : "text-slate-600"
                     }`}
@@ -620,9 +1331,14 @@ export default function DashboardPage() {
 
                   <button
                     type="button"
-                    onClick={() => setDisplayCurrency("IDR")}
+                    onClick={() =>
+                      setDisplayCurrency(
+                        "IDR"
+                      )
+                    }
                     className={`rounded-xl px-4 py-2 text-sm font-semibold ${
-                      displayCurrency === "IDR"
+                      displayCurrency ===
+                      "IDR"
                         ? "bg-green-800 text-white"
                         : "text-slate-600"
                     }`}
@@ -635,19 +1351,26 @@ export default function DashboardPage() {
                 <div className="flex items-center gap-2 pr-2">
 
                   <span className="text-xs text-slate-500">
+
                     {exchangeRateLoading
                       ? "Loading..."
                       : `1 AUD = ${formatCompactNumber(
                           audToIdr,
                           "IDR"
                         )}`}
+
                   </span>
 
                   <button
                     type="button"
-                    onClick={loadExchangeRate}
-                    disabled={exchangeRateLoading}
+                    onClick={
+                      loadExchangeRate
+                    }
+                    disabled={
+                      exchangeRateLoading
+                    }
                   >
+
                     <RefreshCw
                       size={14}
                       className={
@@ -656,6 +1379,7 @@ export default function DashboardPage() {
                           : "text-slate-500"
                       }
                     />
+
                   </button>
 
                 </div>
@@ -664,44 +1388,780 @@ export default function DashboardPage() {
 
             </div>
 
+            {/* =================================================
+                MOBILE SEARCH OVERLAY
+            ================================================= */}
+
+            {mobileSearchOpen && (
+
+              <div className="fixed inset-0 z-[100] bg-white lg:hidden">
+
+                <div className="flex items-center gap-3 border-b border-slate-100 p-4">
+
+                  <div className="flex flex-1 items-center gap-3 rounded-2xl bg-slate-100 px-4 py-3">
+
+                    <Search
+                      size={18}
+                      className="shrink-0 text-slate-400"
+                    />
+
+                    <input
+                      autoFocus
+                      type="text"
+                      value={
+                        searchQuery
+                      }
+                      onChange={(e) =>
+                        setSearchQuery(
+                          e.target.value
+                        )
+                      }
+                      placeholder="Search transactions..."
+                      className="min-w-0 flex-1 bg-transparent text-sm outline-none"
+                    />
+
+                    {searchQuery && (
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setSearchQuery(
+                            ""
+                          )
+                        }
+                      >
+                        <X
+                          size={17}
+                          className="text-slate-400"
+                        />
+                      </button>
+
+                    )}
+
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMobileSearchOpen(
+                        false
+                      );
+
+                      setSearchQuery(
+                        ""
+                      );
+                    }}
+                    className="font-semibold text-green-800"
+                  >
+                    Done
+                  </button>
+
+                </div>
+
+                <div className="p-4">
+
+                  {!searchQuery.trim() ? (
+
+                    <div className="py-20 text-center">
+
+                      <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[#eff5ea] text-green-800">
+
+                        <Search
+                          size={24}
+                        />
+
+                      </div>
+
+                      <p className="mt-4 font-semibold">
+                        Search transactions
+                      </p>
+
+                      <p className="mt-1 text-sm text-slate-500">
+                        Search by merchant, category, source, date, or type.
+                      </p>
+
+                    </div>
+
+                  ) : searchResults.length ===
+                    0 ? (
+
+                    <div className="py-20 text-center">
+
+                      <p className="font-semibold">
+                        No results found
+                      </p>
+
+                      <p className="mt-1 text-sm text-slate-500">
+                        Try another search term.
+                      </p>
+
+                    </div>
+
+                  ) : (
+
+                    <div className="space-y-3">
+
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                        {
+                          searchResults.length
+                        }{" "}
+                        result
+                        {
+                          searchResults.length !==
+                          1
+                            ? "s"
+                            : ""
+                        }
+                      </p>
+
+                      {searchResults.map(
+                        (
+                          transaction
+                        ) => (
+
+                          <div
+                            key={
+                              transaction.id
+                            }
+                            className="flex items-center justify-between gap-3 rounded-2xl bg-slate-50 p-4"
+                          >
+
+                            <div className="min-w-0">
+
+                              <p className="truncate font-semibold">
+                                {
+                                  transaction.description
+                                }
+                              </p>
+
+                              <p className="mt-1 text-xs text-slate-500">
+
+                                {transaction.category ||
+                                  "Other"}
+
+                                {" • "}
+
+                                {
+                                  transaction.date
+                                }
+
+                              </p>
+
+                              <p className="mt-1 text-[11px] capitalize text-slate-400">
+                                {transaction.source ||
+                                  "manual"}
+                              </p>
+
+                            </div>
+
+                            <div className="shrink-0 text-right">
+
+                              <p
+                                className={`font-semibold ${
+                                  transaction.type ===
+                                  "income"
+                                    ? "text-green-600"
+                                    : "text-red-600"
+                                }`}
+                              >
+
+                                {transaction.type ===
+                                "income"
+                                  ? "+"
+                                  : "-"}
+
+                                {formatMoney(
+                                  Number(
+                                    transaction.amount
+                                  )
+                                )}
+
+                              </p>
+
+                            </div>
+
+                          </div>
+
+                        )
+                      )}
+
+                    </div>
+
+                  )}
+
+                </div>
+
+              </div>
+
+            )}
+
+            {/* =================================================
+                MOBILE NOTIFICATION DRAWER
+            ================================================= */}
+
+            {mobileNotificationsOpen && (
+
+              <div className="fixed inset-0 z-[100] bg-black/30 lg:hidden">
+
+                <button
+                  type="button"
+                  aria-label="Close notifications"
+                  onClick={() =>
+                    setMobileNotificationsOpen(
+                      false
+                    )
+                  }
+                  className="absolute inset-0 h-full w-full"
+                />
+
+                <div className="absolute bottom-0 left-0 right-0 max-h-[85vh] overflow-hidden rounded-t-[28px] bg-white shadow-2xl">
+
+                  <div className="mx-auto mt-3 h-1.5 w-12 rounded-full bg-slate-200" />
+
+                  <div className="flex items-center justify-between border-b border-slate-100 p-5">
+
+                    <div>
+
+                      <p className="text-xl font-bold">
+                        Notifications
+                      </p>
+
+                      <p className="mt-1 text-sm text-slate-500">
+                        Upcoming renewals
+                      </p>
+
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setMobileNotificationsOpen(
+                          false
+                        )
+                      }
+                      className="rounded-xl bg-slate-100 p-2.5"
+                    >
+                      <X
+                        size={18}
+                      />
+                    </button>
+
+                  </div>
+
+                  <div className="max-h-[60vh] overflow-y-auto p-4">
+
+                    {subscriptionNotifications.length ===
+                    0 ? (
+
+                      <div className="py-16 text-center">
+
+                        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[#eff5ea] text-green-800">
+
+                          <Bell
+                            size={24}
+                          />
+
+                        </div>
+
+                        <p className="mt-4 font-semibold">
+                          You're all caught up
+                        </p>
+
+                        <p className="mt-1 text-sm text-slate-500">
+                          No subscription reminders right now.
+                        </p>
+
+                      </div>
+
+                    ) : (
+
+                      <div className="space-y-3">
+
+                        {subscriptionNotifications.map(
+                          (
+                            subscription
+                          ) => {
+                            const days =
+                              getDaysUntil(
+                                subscription.next_payment_date
+                              );
+
+                            return (
+
+                              <Link
+                                href="/subscriptions"
+                                key={
+                                  subscription.id
+                                }
+                                onClick={() =>
+                                  setMobileNotificationsOpen(
+                                    false
+                                  )
+                                }
+                                className="block rounded-2xl bg-slate-50 p-4"
+                              >
+
+                                <div className="flex items-start justify-between gap-3">
+
+                                  <div className="min-w-0">
+
+                                    <p className="truncate font-semibold">
+                                      {
+                                        subscription.name
+                                      }
+                                    </p>
+
+                                    <p className="mt-1 text-sm text-slate-500">
+
+                                      {days ===
+                                      0
+                                        ? "Renews today"
+                                        : days ===
+                                          1
+                                        ? "Renews tomorrow"
+                                        : `Renews in ${days} days`}
+
+                                    </p>
+
+                                  </div>
+
+                                  <p className="shrink-0 font-bold">
+                                    {formatMoney(
+                                      Number(
+                                        subscription.amount
+                                      )
+                                    )}
+                                  </p>
+
+                                </div>
+
+                                <div className="mt-3 flex items-center justify-between">
+
+                                  <div className="flex items-center gap-2 text-xs text-slate-500">
+
+                                    <CalendarDays
+                                      size={14}
+                                    />
+
+                                    {formatDate(
+                                      subscription.next_payment_date
+                                    )}
+
+                                  </div>
+
+                                  <ChevronRight
+                                    size={16}
+                                    className="text-slate-400"
+                                  />
+
+                                </div>
+
+                              </Link>
+
+                            );
+                          }
+                        )}
+
+                      </div>
+
+                    )}
+
+                  </div>
+
+                  <div className="border-t border-slate-100 p-4">
+
+                    <Link
+                      href="/subscriptions"
+                      onClick={() =>
+                        setMobileNotificationsOpen(
+                          false
+                        )
+                      }
+                      className="block rounded-2xl bg-[#214f45] p-4 text-center font-semibold text-white"
+                    >
+                      Manage subscriptions
+                    </Link>
+
+                  </div>
+
+                </div>
+
+              </div>
+
+            )}
+
             <div className="p-4 sm:p-5 lg:p-6">
 
-              {/* DESKTOP HEADER */}
+              {/* =================================================
+                  DESKTOP HEADER
+              ================================================= */}
 
               <div className="mb-6 hidden items-center justify-between lg:flex">
 
                 <div>
+
                   <h1 className="text-3xl font-bold">
                     Dashboard
                   </h1>
 
                   <p className="mt-1 text-slate-500">
-                    Overview of your finances, cash flow,
-                    and subscriptions
+                    Overview of your finances, cash flow, and subscriptions
                   </p>
+
                 </div>
 
                 <div className="flex items-center gap-3">
 
-                  <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-slate-500">
-                    <Search size={18} />
-                    <span className="text-sm">
-                      Search transaction...
-                    </span>
+                  {/* DESKTOP SEARCH */}
+
+                  <div className="relative">
+
+                    <div className="flex w-[260px] items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 transition focus-within:border-green-700 focus-within:bg-white focus-within:ring-2 focus-within:ring-green-100">
+
+                      <Search
+                        size={18}
+                        className="shrink-0 text-slate-400"
+                      />
+
+                      <input
+                        value={
+                          searchQuery
+                        }
+                        onFocus={() =>
+                          setSearchOpen(
+                            true
+                          )
+                        }
+                        onChange={(e) => {
+                          setSearchQuery(
+                            e.target.value
+                          );
+
+                          setSearchOpen(
+                            true
+                          );
+
+                          setNotificationsOpen(
+                            false
+                          );
+                        }}
+                        placeholder="Search transaction..."
+                        className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-slate-400"
+                      />
+
+                      {searchQuery && (
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSearchQuery(
+                              ""
+                            );
+
+                            setSearchOpen(
+                              false
+                            );
+                          }}
+                        >
+                          <X
+                            size={16}
+                            className="text-slate-400"
+                          />
+                        </button>
+
+                      )}
+
+                    </div>
+
+                    {searchOpen &&
+                      searchQuery.trim() && (
+
+                        <div className="absolute right-0 top-[calc(100%+10px)] z-50 w-[370px] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
+
+                          <div className="border-b border-slate-100 px-4 py-3">
+
+                            <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                              Search results
+                            </p>
+
+                          </div>
+
+                          {searchResults.length ===
+                          0 ? (
+
+                            <div className="p-6 text-center text-sm text-slate-500">
+                              No matching transactions.
+                            </div>
+
+                          ) : (
+
+                            <div className="max-h-[420px] overflow-y-auto">
+
+                              {searchResults.map(
+                                (
+                                  transaction
+                                ) => (
+
+                                  <div
+                                    key={
+                                      transaction.id
+                                    }
+                                    className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-4 last:border-0"
+                                  >
+
+                                    <div className="min-w-0">
+
+                                      <p className="truncate text-sm font-semibold">
+                                        {
+                                          transaction.description
+                                        }
+                                      </p>
+
+                                      <p className="mt-1 text-xs text-slate-500">
+
+                                        {transaction.category ||
+                                          "Other"}
+
+                                        {" • "}
+
+                                        {
+                                          transaction.date
+                                        }
+
+                                      </p>
+
+                                    </div>
+
+                                    <p
+                                      className={`shrink-0 text-sm font-semibold ${
+                                        transaction.type ===
+                                        "income"
+                                          ? "text-green-600"
+                                          : "text-red-600"
+                                      }`}
+                                    >
+
+                                      {transaction.type ===
+                                      "income"
+                                        ? "+"
+                                        : "-"}
+
+                                      {formatMoney(
+                                        Number(
+                                          transaction.amount
+                                        )
+                                      )}
+
+                                    </p>
+
+                                  </div>
+
+                                )
+                              )}
+
+                            </div>
+
+                          )}
+
+                        </div>
+
+                      )}
+
                   </div>
 
-                  <button
-                    type="button"
-                    className="rounded-2xl border border-slate-200 p-3"
-                  >
-                    <Bell size={18} />
-                  </button>
+                  {/* DESKTOP NOTIFICATION BELL */}
+
+                  <div className="relative">
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNotificationsOpen(
+                          !notificationsOpen
+                        );
+
+                        setSearchOpen(
+                          false
+                        );
+                      }}
+                      className="relative rounded-2xl border border-slate-200 bg-white p-3 transition hover:bg-slate-50"
+                    >
+
+                      <Bell
+                        size={18}
+                      />
+
+                      {subscriptionNotifications.length >
+                        0 && (
+
+                        <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white">
+
+                          {
+                            subscriptionNotifications.length
+                          }
+
+                        </span>
+
+                      )}
+
+                    </button>
+
+                    {notificationsOpen && (
+
+                      <div className="absolute right-0 top-[calc(100%+10px)] z-50 w-[370px] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
+
+                        <div className="flex items-center justify-between border-b border-slate-100 px-4 py-4">
+
+                          <div>
+
+                            <p className="font-bold">
+                              Notifications
+                            </p>
+
+                            <p className="text-xs text-slate-500">
+                              Upcoming subscription renewals
+                            </p>
+
+                          </div>
+
+                          <Bell
+                            size={18}
+                            className="text-green-700"
+                          />
+
+                        </div>
+
+                        {subscriptionNotifications.length ===
+                        0 ? (
+
+                          <div className="p-7 text-center">
+
+                            <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-xl bg-[#eff5ea] text-green-800">
+
+                              <Bell
+                                size={19}
+                              />
+
+                            </div>
+
+                            <p className="mt-3 text-sm font-semibold">
+                              You're all caught up
+                            </p>
+
+                            <p className="mt-1 text-xs text-slate-500">
+                              No subscription reminders right now.
+                            </p>
+
+                          </div>
+
+                        ) : (
+
+                          <div className="max-h-[420px] overflow-y-auto">
+
+                            {subscriptionNotifications.map(
+                              (
+                                subscription
+                              ) => {
+                                const days =
+                                  getDaysUntil(
+                                    subscription.next_payment_date
+                                  );
+
+                                return (
+
+                                  <Link
+                                    href="/subscriptions"
+                                    key={
+                                      subscription.id
+                                    }
+                                    onClick={() =>
+                                      setNotificationsOpen(
+                                        false
+                                      )
+                                    }
+                                    className="block border-b border-slate-100 px-4 py-4 transition last:border-0 hover:bg-slate-50"
+                                  >
+
+                                    <div className="flex items-start justify-between gap-3">
+
+                                      <div className="min-w-0">
+
+                                        <p className="truncate font-semibold">
+                                          {
+                                            subscription.name
+                                          }
+                                        </p>
+
+                                        <p className="mt-1 text-sm text-slate-500">
+
+                                          {days ===
+                                          0
+                                            ? "Renews today"
+                                            : days ===
+                                              1
+                                            ? "Renews tomorrow"
+                                            : `Renews in ${days} days`}
+
+                                        </p>
+
+                                      </div>
+
+                                      <p className="shrink-0 text-sm font-bold">
+                                        {formatMoney(
+                                          Number(
+                                            subscription.amount
+                                          )
+                                        )}
+                                      </p>
+
+                                    </div>
+
+                                    <p className="mt-2 text-xs text-slate-400">
+                                      Renewal:{" "}
+                                      {formatDate(
+                                        subscription.next_payment_date
+                                      )}
+                                    </p>
+
+                                  </Link>
+
+                                );
+                              }
+                            )}
+
+                          </div>
+
+                        )}
+
+                        <div className="border-t border-slate-100 p-3">
+
+                          <Link
+                            href="/subscriptions"
+                            onClick={() =>
+                              setNotificationsOpen(
+                                false
+                              )
+                            }
+                            className="block rounded-xl bg-[#eff5ea] p-3 text-center text-sm font-semibold text-green-800"
+                          >
+                            Manage subscriptions
+                          </Link>
+
+                        </div>
+
+                      </div>
+
+                    )}
+
+                  </div>
 
                   <Link
                     href="/scan"
                     className="flex items-center gap-2 rounded-2xl bg-green-800 px-4 py-3 text-sm font-semibold text-white"
                   >
-                    <Camera size={18} />
+                    <Camera
+                      size={18}
+                    />
                     Scan Receipt
                   </Link>
 
@@ -736,7 +2196,9 @@ export default function DashboardPage() {
                   </p>
 
                   <p className="mt-2 break-words text-xl font-bold sm:text-2xl lg:text-3xl">
-                    {formatMoney(totalBalance)}
+                    {formatMoney(
+                      totalBalance
+                    )}
                   </p>
 
                   <p className="mt-2 hidden text-xs text-green-100 sm:block">
@@ -752,11 +2214,15 @@ export default function DashboardPage() {
                   </p>
 
                   <p className="mt-2 break-words text-xl font-bold sm:text-2xl lg:text-3xl">
-                    {formatMoney(totalIncome)}
+                    {formatMoney(
+                      totalIncome
+                    )}
                   </p>
 
                   <p className="mt-2 hidden items-center gap-1 text-xs text-green-600 sm:flex">
-                    <TrendingUp size={14} />
+                    <TrendingUp
+                      size={14}
+                    />
                     Money in
                   </p>
 
@@ -769,11 +2235,15 @@ export default function DashboardPage() {
                   </p>
 
                   <p className="mt-2 break-words text-xl font-bold sm:text-2xl lg:text-3xl">
-                    {formatMoney(totalExpenses)}
+                    {formatMoney(
+                      totalExpenses
+                    )}
                   </p>
 
                   <p className="mt-2 hidden items-center gap-1 text-xs text-red-600 sm:flex">
-                    <TrendingDown size={14} />
+                    <TrendingDown
+                      size={14}
+                    />
                     Money out
                   </p>
 
@@ -792,7 +2262,10 @@ export default function DashboardPage() {
                   </p>
 
                   <p className="mt-2 text-xs text-slate-500">
-                    {activeSubscriptions.length} active
+                    {
+                      activeSubscriptions.length
+                    }{" "}
+                    active
                   </p>
 
                 </div>
@@ -807,7 +2280,9 @@ export default function DashboardPage() {
                   href="/transactions/new"
                   className="flex items-center justify-center gap-2 rounded-2xl border border-slate-200 p-3 text-sm font-semibold"
                 >
-                  <Plus size={17} />
+                  <Plus
+                    size={17}
+                  />
                   Add Transaction
                 </Link>
 
@@ -815,7 +2290,9 @@ export default function DashboardPage() {
                   href="/scan"
                   className="flex items-center justify-center gap-2 rounded-2xl bg-green-800 p-3 text-sm font-semibold text-white"
                 >
-                  <Camera size={17} />
+                  <Camera
+                    size={17}
+                  />
                   Scan Receipt
                 </Link>
 
@@ -834,6 +2311,7 @@ export default function DashboardPage() {
                   <div className="mb-4 flex items-end justify-between gap-3">
 
                     <div>
+
                       <p className="text-xs text-slate-500 sm:text-sm">
                         Cashflow
                       </p>
@@ -841,6 +2319,7 @@ export default function DashboardPage() {
                       <h2 className="text-lg font-bold sm:text-xl lg:text-2xl">
                         Income vs Spending
                       </h2>
+
                     </div>
 
                     <p className="text-xs text-slate-500">
@@ -857,7 +2336,9 @@ export default function DashboardPage() {
                     >
 
                       <BarChart
-                        data={last6MonthsData}
+                        data={
+                          last6MonthsData
+                        }
                         margin={{
                           top: 10,
                           right: 5,
@@ -869,13 +2350,19 @@ export default function DashboardPage() {
 
                         <CartesianGrid
                           strokeDasharray="3 3"
-                          vertical={false}
+                          vertical={
+                            false
+                          }
                         />
 
                         <XAxis
                           dataKey="month"
-                          tickLine={false}
-                          axisLine={false}
+                          tickLine={
+                            false
+                          }
+                          axisLine={
+                            false
+                          }
                           tick={{
                             fontSize: 11,
                           }}
@@ -883,44 +2370,72 @@ export default function DashboardPage() {
 
                         <YAxis
                           width={65}
-                          tickLine={false}
-                          axisLine={false}
+                          tickLine={
+                            false
+                          }
+                          axisLine={
+                            false
+                          }
                           tickMargin={5}
                           tick={{
                             fontSize: 10,
                           }}
                           domain={[
                             0,
-                            (dataMax: number) =>
-                              dataMax === 0
+                            (
+                              dataMax: number
+                            ) =>
+                              dataMax ===
+                              0
                                 ? 100
-                                : Math.ceil(dataMax * 1.1),
+                                : Math.ceil(
+                                    dataMax *
+                                      1.1
+                                  ),
                           ]}
-                          tickFormatter={(value) =>
+                          tickFormatter={(
+                            value
+                          ) =>
                             formatCompactNumber(
-                              Number(value),
+                              Number(
+                                value
+                              ),
                               displayCurrency
                             )
                           }
                         />
 
                         <Tooltip
-                          formatter={(value, name) => {
+                          formatter={(
+                            value,
+                            name
+                          ) => {
                             const numberValue =
-                              Number(value);
+                              Number(
+                                value
+                              );
 
                             const formatted =
-                              displayCurrency === "AUD"
-                                ? formatAUD(numberValue)
-                                : formatIDR(numberValue);
+                              displayCurrency ===
+                              "AUD"
+                                ? formatAUD(
+                                    numberValue
+                                  )
+                                : formatIDR(
+                                    numberValue
+                                  );
 
-                            return [formatted, name];
+                            return [
+                              formatted,
+                              name,
+                            ];
                           }}
                         />
 
                         <Legend
                           wrapperStyle={{
-                            fontSize: "12px",
+                            fontSize:
+                              "12px",
                           }}
                         />
 
@@ -928,16 +2443,30 @@ export default function DashboardPage() {
                           dataKey="income"
                           name="Income"
                           fill="#214f45"
-                          radius={[6, 6, 0, 0]}
-                          maxBarSize={55}
+                          radius={[
+                            6,
+                            6,
+                            0,
+                            0,
+                          ]}
+                          maxBarSize={
+                            55
+                          }
                         />
 
                         <Bar
                           dataKey="expense"
                           name="Expense"
                           fill="#9FE870"
-                          radius={[6, 6, 0, 0]}
-                          maxBarSize={55}
+                          radius={[
+                            6,
+                            6,
+                            0,
+                            0,
+                          ]}
+                          maxBarSize={
+                            55
+                          }
                         />
 
                       </BarChart>
@@ -948,7 +2477,7 @@ export default function DashboardPage() {
 
                 </div>
 
-                {/* SPENDING */}
+                {/* SPENDING BREAKDOWN */}
 
                 <div className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 p-4 sm:p-5 lg:rounded-3xl lg:p-6">
 
@@ -964,7 +2493,8 @@ export default function DashboardPage() {
 
                   </div>
 
-                  {spendingByCategory.length === 0 ? (
+                  {spendingByCategory.length ===
+                  0 ? (
 
                     <div className="mt-4 flex h-[220px] items-center justify-center rounded-2xl border border-dashed border-slate-300 text-center text-sm text-slate-500">
                       No spending data yet.
@@ -983,18 +2513,32 @@ export default function DashboardPage() {
                           <PieChart>
 
                             <Pie
-                              data={spendingByCategory}
+                              data={
+                                spendingByCategory
+                              }
                               dataKey="value"
                               nameKey="name"
-                              innerRadius={48}
-                              outerRadius={75}
-                              paddingAngle={3}
+                              innerRadius={
+                                48
+                              }
+                              outerRadius={
+                                75
+                              }
+                              paddingAngle={
+                                3
+                              }
                             >
 
                               {spendingByCategory.map(
-                                (entry, index) => (
+                                (
+                                  entry,
+                                  index
+                                ) => (
+
                                   <Cell
-                                    key={entry.name}
+                                    key={
+                                      entry.name
+                                    }
                                     fill={
                                       chartColors[
                                         index %
@@ -1002,22 +2546,36 @@ export default function DashboardPage() {
                                       ]
                                     }
                                   />
+
                                 )
                               )}
 
                             </Pie>
 
                             <Tooltip
-                              formatter={(value, name) => {
+                              formatter={(
+                                value,
+                                name
+                              ) => {
                                 const numberValue =
-                                  Number(value);
+                                  Number(
+                                    value
+                                  );
 
                                 const formatted =
-                                  displayCurrency === "AUD"
-                                    ? formatAUD(numberValue)
-                                    : formatIDR(numberValue);
+                                  displayCurrency ===
+                                  "AUD"
+                                    ? formatAUD(
+                                        numberValue
+                                      )
+                                    : formatIDR(
+                                        numberValue
+                                      );
 
-                                return [formatted, name];
+                                return [
+                                  formatted,
+                                  name,
+                                ];
                               }}
                             />
 
@@ -1030,42 +2588,61 @@ export default function DashboardPage() {
                       <div className="space-y-2">
 
                         {spendingByCategory
-                          .slice(0, 5)
-                          .map((item, index) => (
+                          .slice(
+                            0,
+                            5
+                          )
+                          .map(
+                            (
+                              item,
+                              index
+                            ) => (
 
-                            <div
-                              key={item.name}
-                              className="flex items-center justify-between gap-2 text-sm"
-                            >
+                              <div
+                                key={
+                                  item.name
+                                }
+                                className="flex items-center justify-between gap-2 text-sm"
+                              >
 
-                              <div className="flex min-w-0 items-center gap-2">
+                                <div className="flex min-w-0 items-center gap-2">
 
-                                <div
-                                  className="h-2.5 w-2.5 shrink-0 rounded-full"
-                                  style={{
-                                    backgroundColor:
-                                      chartColors[
-                                        index %
-                                          chartColors.length
-                                      ],
-                                  }}
-                                />
+                                  <div
+                                    className="h-2.5 w-2.5 shrink-0 rounded-full"
+                                    style={{
+                                      backgroundColor:
+                                        chartColors[
+                                          index %
+                                            chartColors.length
+                                        ],
+                                    }}
+                                  />
 
-                                <span className="truncate text-slate-600">
-                                  {item.name}
+                                  <span className="truncate text-slate-600">
+                                    {
+                                      item.name
+                                    }
+                                  </span>
+
+                                </div>
+
+                                <span className="shrink-0 text-xs font-semibold sm:text-sm">
+
+                                  {displayCurrency ===
+                                  "AUD"
+                                    ? formatAUD(
+                                        item.value
+                                      )
+                                    : formatIDR(
+                                        item.value
+                                      )}
+
                                 </span>
 
                               </div>
 
-                              <span className="shrink-0 text-xs font-semibold sm:text-sm">
-                                {displayCurrency === "AUD"
-                                  ? formatAUD(item.value)
-                                  : formatIDR(item.value)}
-                              </span>
-
-                            </div>
-
-                          ))}
+                            )
+                          )}
 
                       </div>
 
@@ -1085,6 +2662,7 @@ export default function DashboardPage() {
                 <div className="mb-4 flex items-center justify-between">
 
                   <div>
+
                     <p className="text-xs text-slate-500 sm:text-sm">
                       Subscriptions
                     </p>
@@ -1092,6 +2670,7 @@ export default function DashboardPage() {
                     <h2 className="text-lg font-bold sm:text-xl">
                       Upcoming Renewals
                     </h2>
+
                   </div>
 
                   <Link
@@ -1103,7 +2682,8 @@ export default function DashboardPage() {
 
                 </div>
 
-                {upcomingSubscriptions.length === 0 ? (
+                {upcomingSubscriptions.length ===
+                0 ? (
 
                   <div className="rounded-2xl border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500">
                     No active subscriptions.
@@ -1114,11 +2694,15 @@ export default function DashboardPage() {
                   <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
 
                     {upcomingSubscriptions.map(
-                      (subscription) => (
+                      (
+                        subscription
+                      ) => (
 
                         <Link
                           href="/subscriptions"
-                          key={subscription.id}
+                          key={
+                            subscription.id
+                          }
                           className="rounded-2xl bg-slate-50 p-4 transition hover:bg-slate-100"
                         >
 
@@ -1127,18 +2711,24 @@ export default function DashboardPage() {
                             <div className="min-w-0">
 
                               <p className="truncate font-semibold">
-                                {subscription.name}
+                                {
+                                  subscription.name
+                                }
                               </p>
 
                               <p className="mt-1 text-xs capitalize text-slate-500">
-                                {subscription.billing_cycle}
+                                {
+                                  subscription.billing_cycle
+                                }
                               </p>
 
                             </div>
 
                             <p className="shrink-0 text-sm font-bold">
                               {formatMoney(
-                                Number(subscription.amount)
+                                Number(
+                                  subscription.amount
+                                )
                               )}
                             </p>
 
@@ -1146,9 +2736,15 @@ export default function DashboardPage() {
 
                           <div className="mt-3 flex items-center gap-2 text-xs text-slate-500">
 
-                            <CalendarDays size={14} />
+                            <CalendarDays
+                              size={
+                                14
+                              }
+                            />
 
-                            {subscription.next_payment_date}
+                            {
+                              subscription.next_payment_date
+                            }
 
                           </div>
 
@@ -1198,7 +2794,8 @@ export default function DashboardPage() {
                     Loading...
                   </p>
 
-                ) : recentTransactions.length === 0 ? (
+                ) : recentTransactions.length ===
+                  0 ? (
 
                   <div className="rounded-2xl border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500">
                     No transactions yet.
@@ -1212,23 +2809,36 @@ export default function DashboardPage() {
                     <div className="space-y-3 md:hidden">
 
                       {recentTransactions.map(
-                        (transaction) => (
+                        (
+                          transaction
+                        ) => (
 
                           <div
-                            key={transaction.id}
+                            key={
+                              transaction.id
+                            }
                             className="flex items-center justify-between gap-3 rounded-2xl bg-slate-50 p-4"
                           >
 
                             <div className="min-w-0">
 
                               <p className="truncate font-semibold">
-                                {transaction.description}
+                                {
+                                  transaction.description
+                                }
                               </p>
 
                               <p className="mt-1 text-xs text-slate-500">
-                                {transaction.category || "Other"}
+
+                                {transaction.category ||
+                                  "Other"}
+
                                 {" • "}
-                                {transaction.date}
+
+                                {
+                                  transaction.date
+                                }
+
                               </p>
 
                             </div>
@@ -1237,25 +2847,35 @@ export default function DashboardPage() {
 
                               <p
                                 className={`font-semibold ${
-                                  transaction.type === "income"
+                                  transaction.type ===
+                                  "income"
                                     ? "text-green-600"
                                     : "text-red-600"
                                 }`}
                               >
-                                {transaction.type === "income"
+
+                                {transaction.type ===
+                                "income"
                                   ? "+"
                                   : "-"}
 
                                 {formatMoney(
-                                  Number(transaction.amount)
+                                  Number(
+                                    transaction.amount
+                                  )
                                 )}
+
                               </p>
 
                               {transaction.currency &&
                                 transaction.original_amount && (
+
                                   <p className="mt-1 text-xs text-slate-400">
+
                                     Original:{" "}
-                                    {transaction.currency === "AUD"
+
+                                    {transaction.currency ===
+                                    "AUD"
                                       ? formatAUD(
                                           Number(
                                             transaction.original_amount
@@ -1266,7 +2886,9 @@ export default function DashboardPage() {
                                             transaction.original_amount
                                           )
                                         )}
+
                                   </p>
+
                                 )}
 
                             </div>
@@ -1311,39 +2933,54 @@ export default function DashboardPage() {
                         <tbody>
 
                           {recentTransactions.map(
-                            (transaction) => (
+                            (
+                              transaction
+                            ) => (
 
                               <tr
-                                key={transaction.id}
+                                key={
+                                  transaction.id
+                                }
                                 className="border-b last:border-b-0"
                               >
 
                                 <td className="py-4 font-medium">
-                                  {transaction.description}
+                                  {
+                                    transaction.description
+                                  }
                                 </td>
 
                                 <td className="py-4 text-slate-500">
-                                  {transaction.date}
+                                  {
+                                    transaction.date
+                                  }
                                 </td>
 
                                 <td className="py-4 text-slate-500">
-                                  {transaction.category || "Other"}
+                                  {transaction.category ||
+                                    "Other"}
                                 </td>
 
                                 <td
                                   className={`py-4 text-right font-semibold ${
-                                    transaction.type === "income"
+                                    transaction.type ===
+                                    "income"
                                       ? "text-green-600"
                                       : "text-red-600"
                                   }`}
                                 >
-                                  {transaction.type === "income"
+
+                                  {transaction.type ===
+                                  "income"
                                     ? "+"
                                     : "-"}
 
                                   {formatMoney(
-                                    Number(transaction.amount)
+                                    Number(
+                                      transaction.amount
+                                    )
                                   )}
+
                                 </td>
 
                               </tr>
@@ -1371,7 +3008,7 @@ export default function DashboardPage() {
       </div>
 
       {/* =================================================
-          MOBILE BOTTOM NAVIGATION
+          MOBILE BOTTOM NAV
       ================================================= */}
 
       <nav className="fixed bottom-0 left-0 right-0 z-50 border-t border-slate-200 bg-white px-2 pb-[max(8px,env(safe-area-inset-bottom))] pt-2 shadow-[0_-4px_20px_rgba(0,0,0,0.05)] lg:hidden">
@@ -1382,7 +3019,10 @@ export default function DashboardPage() {
             href="/"
             className="flex flex-col items-center gap-1 py-1 text-green-800"
           >
-            <LayoutDashboard size={20} />
+            <LayoutDashboard
+              size={20}
+            />
+
             <span className="text-[10px] font-semibold">
               Home
             </span>
@@ -1392,13 +3032,14 @@ export default function DashboardPage() {
             href="/transactions/new"
             className="flex flex-col items-center gap-1 py-1 text-slate-500"
           >
-            <ArrowLeftRight size={20} />
+            <ArrowLeftRight
+              size={20}
+            />
+
             <span className="text-[10px]">
               Transactions
             </span>
           </Link>
-
-          {/* CENTER SCAN BUTTON */}
 
           <Link
             href="/scan"
@@ -1406,7 +3047,9 @@ export default function DashboardPage() {
           >
 
             <div className="flex h-14 w-14 items-center justify-center rounded-full border-4 border-white bg-green-800 text-white shadow-lg">
-              <Camera size={23} />
+              <Camera
+                size={23}
+              />
             </div>
 
             <span className="mt-1 text-[10px] font-semibold text-green-800">
@@ -1419,7 +3062,10 @@ export default function DashboardPage() {
             href="/subscriptions"
             className="flex flex-col items-center gap-1 py-1 text-slate-500"
           >
-            <Repeat2 size={20} />
+            <Repeat2
+              size={20}
+            />
+
             <span className="text-[10px]">
               Subs
             </span>
@@ -1429,7 +3075,10 @@ export default function DashboardPage() {
             href="/analysis"
             className="flex flex-col items-center gap-1 py-1 text-slate-500"
           >
-            <Sparkles size={20} />
+            <Sparkles
+              size={20}
+            />
+
             <span className="text-[10px]">
               AI
             </span>
